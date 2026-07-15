@@ -714,11 +714,7 @@
 (def global-frame-buffer (atom nil))
 
 (defn do-instruction-loop!
-  "Executes a single PAL frame scanline-by-scanline, updating imagery dynamically.
-   
-   Drives the entire emulator's timing loop. It synchronizes Z80 CPU execution slices
-   with real-time raster scanline generations, allowing games to use mid-frame 
-   register writes (raster effects) for split-screen parallax scrolling or palette swapping."
+  "Executes a single PAL frame scanline-by-scanline, updating imagery dynamically."
   [^com.codingrodent.microprocessor.Z80.Z80Core cpu
    ^com.codingrodent.microprocessor.IMemory memory-bus]
   (let [;; PAL Sega Master System metrics: 313 total scanlines per frame (0 to 312).
