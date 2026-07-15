@@ -38,8 +38,8 @@
 ;; and dynamically loads parts of large games into the ROM space.
 ;; Track the current active bank index for each of the three 16KB slots
 (def mapper-banks (atom {:slot0 0
-                                 :slot1 1
-                                 :slot2 2}))
+                         :slot1 1
+                         :slot2 2}))
 (def ^{:tag 'bytes} sms-ram (byte-array 8192)) ;; 8KB of actual Work RAM
 
 (defn signed->unsigned
@@ -221,88 +221,6 @@
 ;; Instantiate the CPU with both Memory and IO Bus
 (def ^com.codingrodent.microprocessor.Z80.Z80Core cpu (Z80Core. memory-bus io-bus))
 
-;; --------------------------------------------------------------------------------------------------
-;; --------------------------------------- Z80 Instruction Loop -------------------------------------
-;; --------------------------------------------------------------------------------------------------
-
-(defn vblank-irq-enabled?
-  "Checks the VDP's internal Register 1 state to see if the Sega Master System 
-   hardware has enabled V-Blank Frame Interrupt requests."
-  []
-  (let [vdp-regs ^ints (:regs @active-vdp)
-        reg1 (if (> (alength vdp-regs) 1) (aget vdp-regs 1) 0)]
-    ;; Bit 5 of VDP Register 1 enables the Frame Interrupt (V-Blank IRQ)
-    (not= 0 (bit-and reg1 0x20))))
-
-(defn hblank-irq-enabled?
-  "Checks Bit 4 of VDP Register 0 to see if Line Interrupts (H-Blank IRQs) are enabled."
-  []
-  (let [vdp-regs ^ints (:regs @active-vdp)
-        reg0 (if (> (alength vdp-regs) 0) (aget vdp-regs 0) 0)]
-    (not= 0 (bit-and reg0 0x10))))
-
-(defn get-vdp-reg10
-  "Retrieves the value of VDP Register 10 (Scanline target)."
-  []
-  (let [vdp-regs ^ints (:regs @active-vdp)]
-    (if (> (alength vdp-regs) 10) (aget vdp-regs 10) 0)))
-
-(defn do-instruction-loop!
-  "Executes a single PAL frame scanline-by-scanline (313 lines total)."
-  [^com.codingrodent.microprocessor.Z80.Z80Core cpu
-   ^com.codingrodent.microprocessor.IMemory memory-bus]
-  ;; PAL Master System frames have exactly 313 scanlines (0 to 312).
-  ;; 313 lines * 228 cycles = 71364 cycles total per frame.
-  (let [lines-per-frame 313
-        cycles-per-line 228
-        ;; The VDP's register 10 holds a counter that is crucial the the timing of the H-BLANK.
-        ;; The Master System triggers an H-BLANK interrupt only if this counter rolls over below zero.
-        line-interrupt-counter (atom (get-vdp-reg10))]
-    (dotimes [scanline lines-per-frame]
-      (let [start-tstates (.getTStates cpu)
-            target-tstates (+ start-tstates cycles-per-line)]
-        ;; Synchronize the VDP state with the current loop scanline
-        (swap! active-vdp assoc :current-scan-line scanline)
-        ;; 1. STEP THE CPU FOR ONE FULL SCANLINE (228 T-states)
-        (loop []
-          (when (< (.getTStates cpu) target-tstates)
-            (.executeOneInstruction cpu)
-            (recur)))
-        ;; 2. HANDLE H-BLANK AND SPRITE COLLISIONS (ACTIVE VIDEO LINES: 0 to 192)
-        (if (<= scanline 192)
-          (do
-            ;; Check for sprite collision if the current scanline matches the sprite Y position
-            (swap! active-vdp check-sprite-collision!)
-            (let [current-count @line-interrupt-counter
-                  new-count (dec current-count)]
-              (if (< new-count 0)
-                (do
-                  ;; Counter underflowed! Reload from VDP Register 10
-                  (reset! line-interrupt-counter (get-vdp-reg10))
-                  ;; Trigger CPU Interrupt if the game requested H-Blank IRQs
-                  ;; We have just processed a whole single scan-line with the loop above.
-                  ;; So, we can trigger an interrupt to let the game know there is a short time
-                  ;; before we snap back and process another scan-line.
-                  (when (hblank-irq-enabled?)
-                    (.setInterrupt cpu true)))
-                ;; Decrement counter normally
-                (reset! line-interrupt-counter new-count))))
-          ;; Outside active display, the counter resets/reloads constantly
-          (reset! line-interrupt-counter (get-vdp-reg10)))
-        ;; 3. HANDLE V-BLANK
-        ;; Trigger a VBlank on the last visible scanline, so that games have time to update
-        ;; before we go back to scanline 1 and start processing a new frame. This will be a significant pause.
-        ;; This is the longest most crucial synchronization event.
-        ;; During V-BLANK the VRAM is fully accessible without disrupting the display.
-        ;; Games use this window to: Update sprite positions (moving characters, enemies, projectiles),
-        ;; Load new tile graphics into VDP memory and more.
-        (when (= scanline 193)
-          (swap! active-vdp assoc :vblank-active? true)
-          (when (vblank-irq-enabled?)
-            (.setInterrupt cpu true)))
-        ;; End of frame - Clear V-BLANK here.
-        (when (= scanline 312)
-          (swap! active-vdp assoc :vblank-active? false))))))
 
 ;; --------------------------------------------------------------------------------------------------
 ;; ------------------------------------------- ROM Loading ------------------------------------------
@@ -463,11 +381,11 @@
     (->BackgroundData naming-table-start base-scroll-x base-scroll-y max-rows visible-height 
                     overscan-color h-scroll-lock? v-scroll-lock? hide-left-8?)))
 
-;; NOTE: Perhaps split this up into more helper functions. There are 7 distinct steps that I can identify.
-(defn draw-background-pixel!
-  "Renders a single pixel onto the target image buffer, factoring in scrolls and flips.
-   Note that the image buffer is just a primitive array, so this 'rendering' shoud be fast."
+(defn draw-single-background-line-pixel!
+  "Renders a single pixel for a scanline, factoring in horizontal/vertical locks, flips.
+   Returns a high-performance closure meant to be run repeatedly across individual horizontal loops."
   [cfg ^bytes vram-bytes ^ints color-palette-cache ^ints img-pixels]
+  ;; Extract layout configurations once to avoid map property lookups inside the hot inner pixel loop
   (let [naming-table-start (int (:naming-table-start cfg))
         base-scroll-x      (int (:base-scroll-x cfg))
         base-scroll-y      (int (:base-scroll-y cfg))
@@ -475,99 +393,116 @@
         overscan-color     (int (:overscan-color cfg))
         hide-left-8?       (boolean (:hide-left-8? cfg))
         vram-len           (int (alength vram-bytes))]
-    ;; Return a fast lambda for the inner loops to call without argument overhead
-    (fn [pixel-x pixel-y tile-fine-y tile-fine-x col-v-locked? row-h-locked?]
-      ;; 1. Calculate the background-relative Y coordinates
+    (fn [pixel-x pixel-y col-v-locked? row-h-locked?]
+      ;; 1. VERTICAL AXIS LOOKUPS
+      ;; If vertical scroll locking is active (for column entries >= 24), bypass VDP scroll offsets.
       (let [actual-bg-y      (int (if col-v-locked? pixel-y (+ pixel-y base-scroll-y)))
-            map-tile-y       (int (mod (quot actual-bg-y 8) max-rows)) ;; Which tile row we are on (0-27 or 0-31)
-            tile-fine-y-act  (int (mod actual-bg-y 8))                 ;; Fine Y row offset inside the 8x8 tile
-            table-row-offset (int (* map-tile-y 32))                   ;; The Name Table is exactly 32 tiles wide
-            ;; 2. Calculate the background-relative X coordinates
+            ;; Find which tile row (0-27 or 0-31 depending on mode-224) contains the targeted pixel y-coordinate
+            map-tile-y       (int (mod (quot actual-bg-y 8) max-rows))
+            ;; Calculate the exact fine-Y offset (0 to 7) inside that 8x8 graphic matrix cell
+            tile-fine-y-act  (int (mod actual-bg-y 8))
+            ;; The VDP Name Table is exactly 32 tiles wide (holds data for 32 horizontal tile columns per tile row)
+            table-row-offset (int (* map-tile-y 32))
+            
+            ;; 2. HORIZONTAL AXIS LOOKUPS
+            ;; If horizontal scroll locking is active (for tile rows 0 and 1), bypass VDP scroll offsets.
             bg-x             (int (if row-h-locked? pixel-x (signed->unsigned (- pixel-x base-scroll-x))))
-            map-tile-x       (int (quot bg-x 8))                       ;; Which tile column we are on (0-31)
-            tile-fine-x-act  (int (mod bg-x 8))                        ;; Fine X pixel offset inside the 8x8 tile
-            ;; 3. Compute VRAM index for the target Name Table entry
+            ;; Find which tile column (0-31) contains the targeted pixel x-coordinate
+            map-tile-x       (int (quot bg-x 8))
+            ;; Calculate the exact fine-X offset (0 to 7) inside that 8x8 graphic matrix cell
+            tile-fine-x-act  (int (mod bg-x 8))
+            
+            ;; 3. READ NAME TABLE ENTRY FROM VRAM
+            ;; Every background coordinate is represented by a 2-byte descriptor (16 bits)
             table-idx        (int (+ table-row-offset map-tile-x))
-            addr-offset      (int (+ naming-table-start (* table-idx 2)))] ;; Every Name Table entry is 2 bytes (16 bits)
+            addr-offset      (int (+ naming-table-start (* table-idx 2)))]
+        
         (if (< addr-offset vram-len)
-          ;; 4. Read the 16-bit Name Table entry
           (let [low-byte        (int (signed->unsigned (aget vram-bytes addr-offset)))
                 high-byte       (int (signed->unsigned (aget vram-bytes (unchecked-inc addr-offset))))
-                ;; Combine lower byte and low bit of upper byte for the tile's pattern index (0-511)
+                ;; Bit 0 of High-Byte paired with Low-Byte creates the 9-bit pattern tile index (0 to 511)
                 tile-index      (int (bit-or low-byte (bit-shift-left (bit-and high-byte 0x01) 8)))
-                ;; Extract rendering attributes from the high byte
-                h-flip?         (not= 0 (bit-and high-byte 0x02)) ;; Bit 1: Flip pattern horizontally
-                v-flip?         (not= 0 (bit-and high-byte 0x04)) ;; Bit 2: Flip pattern vertically
-                use-palette-1?  (not= 0 (bit-and high-byte 0x08)) ;; Bit 3: Select palette (0 = Palette 0, 1 = Palette 1)
-                palette-offset  (if use-palette-1? 16 0)          ;; Palette 1 starts at slot index 16
-                ;; 5. Flip pixel offsets if the descriptor dictates it
+                
+                ;; 4. PARSE TILE DESCRIPTOR RENDERING FLAGS
+                h-flip?         (not= 0 (bit-and high-byte 0x02))       ;; Bit 1: Flip tile pixels horizontally
+                v-flip?         (not= 0 (bit-and high-byte 0x04))       ;; Bit 2: Flip tile pixels vertically
+                use-palette-1?  (not= 0 (bit-and high-byte 0x08))       ;; Bit 3: Palette select (0 = Palette 0, 1 = Palette 1)
+                palette-offset  (if use-palette-1? 16 0)                ;; System background colors reside in palette entries 16-31
+                
+                ;; Map fine coordinates depending on active flip vectors
                 target-y        (int (if v-flip? (- 7 tile-fine-y-act) tile-fine-y-act))
                 target-x        (int (if h-flip? (- 7 tile-fine-x-act) tile-fine-x-act))
-                ;; 6. Fetch 4-bit color index (SMS patterns are stored in a 4bpp format)
+                
+                ;; Extract the 4-bit pixel color using the SMS planar unpacking routine (SMS patterns are stored in a 4bpp format)
                 local-color-idx (int (get-sms-pixel-color-idx vram-bytes tile-index target-y target-x))
                 color-idx       (+ local-color-idx palette-offset)
                 pixel-color     (int (aget color-palette-cache color-idx))
-                dest-idx        (int (+ (* pixel-y 256) pixel-x))] ;; Compute linear index for the 256-wide frame buffer
-            ;; 7. Apply left-side masking or commit final pixel color
+                
+                ;; 5. ENCODE METADATA FOR SPRITE LAYER PRIORITY
+                ;; Extract Background Priority Flag (Bit 4 of Name Table High-Byte)
+                bg-priority?    (not= 0 (bit-and high-byte 0x10))
+                
+                ;; - Bit 24: Store Priority State (0 = No priority, 1 = Priority active)
+                ;; - Bits 25-28: Store local 4-bit palette color index (0 to 15, to determine background transparency)
+                encoded-pixel   (bit-or (bit-and pixel-color 0x00FFFFFF) 
+                                        (if bg-priority? 0x01000000 0x00000000)
+                                        (bit-shift-left local-color-idx 25))
+                
+                ;; Compute linear destination index for the 256-wide SMS frame buffer
+                dest-idx        (int (+ (* pixel-y 256) pixel-x))]
+            
+            ;; 6. WRITE PIXEL TO THE FRAME BUFFER
+            ;; If Register 0 Bit 5 is checked, Column 0 (leftmost 8 pixels) blanks out to hide scrolling artifacts.
             (if (and hide-left-8? (< pixel-x 8))
-              (aset-int img-pixels dest-idx overscan-color)
-              (aset-int img-pixels dest-idx pixel-color)))
-          ;; Out-of-bounds VRAM fallback safeguard: render overscan/border color
-          (aset-int img-pixels (int (+ (* pixel-y 256) pixel-x)) overscan-color))))))
+              (aset img-pixels dest-idx overscan-color)
+              (aset img-pixels dest-idx encoded-pixel)))
+          
+          ;; VRAM Safeguard: fall back to painting the official overscan color into the 256-wide buffer
+          (aset img-pixels (int (+ (* pixel-y 256) pixel-x)) overscan-color))))))
 
-;; Same note here. There are a total of at least 6 distinct steps. Probably can split this one further.
-(defn draw-background-image!
-  "Takes the Master System VDP,
-  extracts the current image background bytes from the VDP's VRAM and returns a Quil image with the background drawn in it."
-  [^z80.vdp.VdpState vdp]
-  ;; 1. Unpack VDP hardware state arrays and cache active palette colors
+(defn draw-background-line!
+  "Renders only the background pixels for the current active scanline into the Quil image buffer."
+  [^z80.vdp.VdpState vdp background-image scanline]
   (let [vram-bytes  ^bytes (:vram vdp)
-        cram-ints   ^ints (:cram vdp)  ;; Color RAM (CRAM) holding system colors
+        cram-ints   ^ints (:cram vdp)
         vdp-regs    ^ints (:regs vdp)
+        ;; Pull the system palette configuration out of CRAM (Color RAM holding system colors)
         color-palette-cache ^ints (get-vdp-color-palette cram-ints)
-        ;; Parse and compute display attributes for the current frame
         cfg (parse-background-data vdp-regs color-palette-cache)
         visible-height (int (:visible-height cfg))
         overscan-color (int (:overscan-color cfg))
         h-scroll-lock? (boolean (:h-scroll-lock? cfg))
         v-scroll-lock? (boolean (:v-scroll-lock? cfg))
-        ;; Create a Quil/Processing image matching the standard 256x224 frame buffer canvas
-        screen-image (q/create-image 256 224 :rgb)
-        img-pixels ^ints (.pixels ^processing.core.PImage screen-image)
-        ;; Initialize our pixel drawing function.
-        draw-pixel! (draw-background-pixel! cfg vram-bytes color-palette-cache img-pixels)]
-    ;; Open the pixel array for direct, fast primitive writes
-    (.loadPixels ^processing.core.PImage screen-image)
-    ;; 2. Loop through all 28 visible screen tile rows (224 total vertical pixels / 8)
-    (dotimes [screen-tile-y 28]
-      (let [tile-y-int (int screen-tile-y)
-            ;; SMS feature: If bit 6 of Reg 0 is set, horizontal scrolling is locked for rows 0 and 1 (Scoreboard/HUD)
-            row-h-locked? (and h-scroll-lock? (< tile-y-int 2))]
-        ;; 3. Loop through all 32 screen tile columns (256 total horizontal pixels / 8)
-        (dotimes [screen-tile-x 32]
-          (let [tile-x-int (int screen-tile-x)
-                ;; SMS feature: If bit 7 of Reg 0 is set, vertical scrolling is locked for columns 24 to 31 (Side HUD)
-                col-v-locked? (and v-scroll-lock? (>= tile-x-int 24))]
-            ;; 4. Loop through the 8 vertical fine pixel rows inside the current 8x8 tile matrix cell
-            (dotimes [fine-y 8]
-              (let [fy (int fine-y)
-                    pixel-y (int (+ (* tile-y-int 8) fy))]
-                ;; 5. Check if the line falls within the currently active VDP video height (192 vs 224 mode)
-                (if (< pixel-y visible-height)
-                  ;; Draw the active graphic pixels across the 8 fine horizontal positions of the tile
-                  (dotimes [fine-x 8]
-                    (let [fx (int fine-x)
-                          pixel-x (int (+ (* tile-x-int 8) fx))]
-                      (draw-pixel! pixel-x pixel-y fy fx col-v-locked? row-h-locked?)))
-                  ;; 6. Handle offscreen color writing (e.g., lines 193-224 when running in 192-line mode)
-                  ;; Blanks out the remainder of the 224-tall texture canvas with the official overscan/border color
-                  (let [dest-row-offset (int (* pixel-y 256))]
-                    (dotimes [fine-x 8]
-                      (let [pixel-x (int (+ (* tile-x-int 8) (int fine-x)))]
-                        (aset-int img-pixels (int (+ dest-row-offset pixel-x)) overscan-color)))))))))))
-    ;; Push modified int-array pixels back into the image.
-    (.updatePixels ^processing.core.PImage screen-image)
-    screen-image))
+        
+        ;; Open the pixel array for direct, fast primitive writes.
+        img-pixels ^ints (.pixels ^processing.core.PImage background-image)
+        draw-pixel! (draw-single-background-line-pixel! cfg vram-bytes color-palette-cache img-pixels)
+        
+        pixel-y (int scanline)
+        tile-y-int (int (quot pixel-y 8))
+        ;; SMS feature: If bit 6 of Reg 0 is set, horizontal scrolling is locked for rows 0 and 1 (game Scoreboard/HUD)
+        row-h-locked? (and h-scroll-lock? (< tile-y-int 2))]
+    
+    ;; Check if the current line falls within the currently active VDP video height (192 vs 224 mode)
+    (if (< pixel-y visible-height)
+      ;; LOOP 1: Line falls inside active resolution limits. Loop through all 32 hardware tile columns.
+      (dotimes [screen-tile-x 32]
+        (let [tile-x-int (int screen-tile-x)
+              ;; SMS feature: If bit 7 of Reg 0 is set, vertical scrolling is locked for columns 24 to 31 (Side HUD)
+              col-v-locked? (and v-scroll-lock? (>= tile-x-int 24))]
+          ;; Loop across the 8 horizontal fine pixels belonging to this column block
+          (dotimes [fx 8]
+            (let [pixel-x (int (+ (* tile-x-int 8) fx))]
+              (draw-pixel! pixel-x pixel-y col-v-locked? row-h-locked?)))))
+      
+      ;; LOOP 2: Handle offscreen color writing (e.g., lines 193-224 when running in 192-line mode)
+      ;; Blanks out the remainder of the 224-tall texture canvas with the official overscan/border color
+      (let [dest-row-offset (int (* pixel-y 256))]
+        (dotimes [pixel-x 256]
+          ;; Use standard aset for fast unboxed array modification
+          (aset img-pixels (int (+ dest-row-offset pixel-x)) overscan-color))))
+    background-image))
+
 
 ;; --------------------------------------------------------------------------------------------------
 ;; --------------------------------------- Sprite Display Code --------------------------------------
@@ -637,87 +572,237 @@
     (SpriteData. visible-height sat-base-addr sat-info-table sprite-tile-base 
                           large-sprites? vram-bytes color-palette-cache img-pixels)))
 
-(defn draw-entire-sprite!
-  "Renders all lines of an individual sprite onto the active image buffer.
-  Note that the image buffer inside our SpriteData is a primitive array. So this 'rendering' is fast."
-  [^SpriteData ctx pixel-x raw-tile-index sprite-y]
+(defn draw-single-sprite-line!
+  "Renders only a SINGLE horizontal row of a SINGLE sprite matching the current scanline.
+   This function draws one horizontal row of 8 pixels for one individual sprite on the current scanline.
+
+   Note that the image buffer inside our SpriteData is a primitive array, ensuring high-speed rendering.
+   Loops across the 8 horizontal pixels of the matching row to perform transparency,
+   clipping, and priority evaluations against pre-rendered background metadata."
+  [^SpriteData ctx pixel-x raw-tile-index fine-y current-screen-y]
+  ;; Extract context fields directly from the primitive record to avoid reflection or map lookups
   (let [sx                 (int pixel-x)
-        sy                 (int sprite-y)
-        raw-tile           (int raw-tile-index)
-        ;; Unpack optimized primitive fields from the SpriteData context record
-        visible-height     (int (.-visible-height ctx))
         sprite-tile-base   (int (.-sprite-tile-base ctx))
         large-sprites?     (boolean (.-large-sprites? ctx))
         vram-bytes         ^bytes (.-vram-bytes ctx)
         color-palette-cache ^ints (.-color-palette-cache ctx)
         img-pixels         ^ints (.-img-pixels ctx)
-        vram-len           (int (alength vram-bytes))]
-    ;; Iterate through vertical sprite rows: 16 iterations for large mode (8x16) or 8 for standard (8x8)
-    (dotimes [y (if large-sprites? 16 8)]
-      (let [y-curr           (int y)
-            ;; SMS Hardware Rule for 8x16: When large mode is active, the pattern index of the 
-            ;; bottom tile automatically increments based on the vertical row index (quot y-curr 8).
-            actual-tile-index (int (if large-sprites?
-                                     (let [base-tile (int (signed->unsigned raw-tile))
-                                           tile-offset (int (quot y-curr 8))]
-                                       (+ base-tile tile-offset))
-                                     raw-tile))
-            final-sprite-tile (int (+ actual-tile-index sprite-tile-base))
-            fine-y            (int (mod y-curr 8))
-            current-screen-y  (int (+ sy y-curr))]
-        ;; HARDWARE CLIPPING RULE
-        ;; Prevent rendering rows that fall outside the active vertical screen space bounds.
-        (when (and (>= current-screen-y 0) (< current-screen-y visible-height))
-          ;; Iterate across all 8 horizontal pixels inside the sprite pattern row
-          (dotimes [x 8]
-            (let [color-idx (int (get-sms-pixel-color-idx vram-bytes final-sprite-tile fine-y (int x)))]
-              ;; Transparency rule: Index 0 does not render
-              (when (> color-idx 0)
-                (let [current-screen-x (int (+ sx (int x)))]
-                  ;; Boundary protection against offscreen horizontal coordinates
-                  (when (and (>= current-screen-x 0) (< current-screen-x 256))
-                    (let [;; SMS sprites map exclusively to the second 16-color block of the system palette
-                          sprite-color-idx (int (+ color-idx 16))
-                          pixel-color     (int (aget color-palette-cache sprite-color-idx))
-                          ;; Calculate linear destination index inside the 256-pixel wide frame buffer
-                          dest-idx        (int (+ (* current-screen-y 256) current-screen-x))]
-                      (aset-int img-pixels dest-idx pixel-color))))))))))))
+        
+        ;; 1. 8x16 SPRITE TILE INDEX CALCULATIONS
+        ;; Real SMS Rule: In 8x16 mode, the tile index specified in the SAT applies to the top half.
+        ;; The VDP automatically forces an index increment for the bottom half tile pattern row.
+        tile-offset        (int (quot fine-y 8))
+        actual-tile-index  (int (if large-sprites? 
+                                  (+ (int (signed->unsigned raw-tile-index)) tile-offset) 
+                                  raw-tile-index))
+        final-sprite-tile  (int (+ actual-tile-index sprite-tile-base))
+        tile-fine-y        (int (mod fine-y 8))
+        dest-row-offset    (int (* current-screen-y 256))]
 
-(defn draw-sprites!
+    ;; 2. HORIZONTAL PIXEL LOOP
+    (dotimes [x 8]
+      (let [color-idx (int (get-sms-pixel-color-idx vram-bytes final-sprite-tile tile-fine-y (int x)))]
+        ;; Hardware Rule: Sprite color index 0 is always transparent and does not paint.
+        (when (> color-idx 0)
+          (let [current-screen-x (int (+ sx (int x)))]
+            ;; Boundary protection against offscreen horizontal coordinates (viewport clipping)
+            (when (and (>= current-screen-x 0) (< current-screen-x 256))
+              (let [dest-idx         (int (+ dest-row-offset current-screen-x))
+                    
+                    ;; 3. DECODE BACKGROUND LAYER METADATA
+                    ;; Wrap read values in unchecked-int to bypass safe integer conversion traps.
+                    bg-pixel-raw     (unchecked-int (aget img-pixels dest-idx))
+                    ;; Extract 4-bit color index stored at bits 25-28 of the background pixel
+                    bg-color-idx     (int (bit-and (bit-shift-right bg-pixel-raw 25) 0x0F))
+                    ;; Extract 1-bit background priority flag stored at bit 24
+                    bg-has-priority? (not= 0 (bit-and bg-pixel-raw 0x01000000))
+                    
+                    ;; 4. EVALUATE LAYER MIXING PRIORITY
+                    ;; The sprite wins if the background tile lacks priority,
+                    ;; OR if the background tile has priority but this individual pixel is transparent (index 0).
+                    should-draw?     (or (not bg-has-priority?) 
+                                         (= bg-color-idx 0))]
+                
+                (when should-draw?
+                  (let [;; SMS sprites map exclusively to the second 16-color block of the system palette
+                        sprite-color-idx (int (+ color-idx 16))
+                        pixel-color      (int (aget color-palette-cache sprite-color-idx))]
+                    ;; Commit pixel to frame buffer array:
+                    ;; - Keep bits 24-31 unchanged (retains background metadata for subsequent calculations)
+                    ;; - Overwrite bits 0-23 with the new 24-bit sprite RGB values
+                    (aset img-pixels dest-idx (bit-or (bit-and bg-pixel-raw 0xFF000000) 
+                                                      (bit-and pixel-color 0x00FFFFFF)))))))))))))
+
+(defn draw-all-sprites-line-for-scanline!
   "Takes a Quil image with the current background drawn on it.
-   Returns a new image with both the background and the foreground sprites drawn on it."
-  [^processing.core.PImage background-image]
+   Basically draws a single line of all sprites matching the current scanline.
+   Scans all 64 potential hardware sprites and draws their line ONLY if they intersect the active scanline.
+   Returns the updated image with matching sprites applied."
+  [background-image scanline mode-224?]
   (let [vdp                 @active-vdp
         vram-bytes          ^bytes (:vram vdp)
         cram-ints           ^ints (:cram vdp)
         vdp-regs            ^ints (:regs vdp)
         color-palette-cache ^ints (get-vdp-color-palette cram-ints)
-        img-pixels          ^ints (.pixels background-image)
+        img-pixels          ^ints (.pixels ^processing.core.PImage background-image)
         vram-len            (int (alength vram-bytes))
-        ;; Bundle VDP configuration parameters into our 1-argument payload container
+        ;; Parse and gather VDP constraints into a single memory block record
         ^SpriteData ctx     (parse-sprite-data vdp-regs vram-bytes color-palette-cache img-pixels)
         sat-base-addr       (int (.-sat-base-addr ctx))
-        sat-info-table      (int (.-sat-info-table ctx))]
-    ;; Scan through all 64 potential hardware sprite slots inside the SAT
+        sat-info-table      (int (.-sat-info-table ctx))
+        sprite-height       (int (if (.-large-sprites? ctx) 16 8))]
+
+    ;; Loop through all 64 possible sprite descriptors stored inside the Sprite Attribute Table (SAT)
     (loop [sprite-id (int 0)]
       (when (< sprite-id 64)
         (let [y-addr (int (+ sat-base-addr sprite-id))
               raw-y  (int (if (< y-addr vram-len) (signed->unsigned (aget vram-bytes y-addr)) 0))]
-          ;; HARDWARE TERMINATION SIGNAL
-          ;; A value of 0xD0 in the Y list signals the VDP parser to halt drawing subsequent sprites.
-          (when (not= raw-y 0xD0)
-            (let [info-idx       (int (* sprite-id 2))
-                  x-addr         (int (+ sat-info-table info-idx))
-                  tile-addr      (int (inc x-addr))
-                  sprite-x       (int (if (< x-addr vram-len) (signed->unsigned (aget vram-bytes x-addr)) 0))
-                  raw-tile-index (int (if (< tile-addr vram-len) (signed->unsigned (aget vram-bytes tile-addr)) 0))
-                  ;; SMS internal quirk: The Y position stored in the SAT table is offset by -1.
+          
+          ;; A vertical coordinate entry of 0xD0 signals the VDP to drop subsequent sprite calculations.
+          ;; Real SMS Exception: This rule is disabled completely when running in extended 224-line mode.
+          (when (or mode-224? (not= raw-y 0xD0))
+            (let [;; Internal SMS quirk: Y positions in the SAT are offset by -1.
                   ;; Adding 1 aligns the execution cleanly to target screen spaces.
-                  sprite-y       (int (inc raw-y))]
-              (draw-entire-sprite! ctx sprite-x raw-tile-index sprite-y)
-              (recur (inc sprite-id)))))))
-    (.updatePixels background-image)
-    background-image))
+                  sprite-y (int (inc raw-y))
+                  ;; Measure distance from current scanline to evaluate intersection matrix bounds
+                  fine-y   (int (- scanline sprite-y))]
+              
+              ;; VERTICAL SCANLINE INTERSECTION EVALUATION
+              (when (and (>= fine-y 0) (< fine-y sprite-height))
+                (let [info-idx       (int (* sprite-id 2))
+                      x-addr         (int (+ sat-info-table info-idx))
+                      ;; In the secondary SAT structure, the pattern/tile index is the byte right after the X coordinate
+                      tile-addr      (int (inc x-addr))
+                      
+                      ;; Fetch properties from secondary SAT tracking offset arrays (X coordinates & Tile indices)
+                      sprite-x       (int (if (< x-addr vram-len) (signed->unsigned (aget vram-bytes x-addr)) 0))
+                      raw-tile-index (int (if (< tile-addr vram-len) (signed->unsigned (aget vram-bytes tile-addr)) 0))]
+                  
+                  ;; Fire single-row renderer for matching intersection targets
+                  (draw-single-sprite-line! ctx sprite-x raw-tile-index fine-y scanline)))
+              
+              ;; Advance to parse the next sprite entry block
+              (recur (inc sprite-id)))))))))
+
+;; --------------------------------------------------------------------------------------------------
+;; --------------------------------------- Z80 Instruction Loop -------------------------------------
+;; --------------------------------------------------------------------------------------------------
+
+(defn vblank-irq-enabled?
+  "Checks the VDP's internal Register 1 state to see if the Sega Master System 
+   hardware has enabled V-Blank Frame Interrupt requests."
+  []
+  (let [vdp-regs ^ints (:regs @active-vdp)
+        reg1 (if (> (alength vdp-regs) 1) (aget vdp-regs 1) 0)]
+    ;; Bit 5 of VDP Register 1 enables the Frame Interrupt (V-Blank IRQ)
+    (not= 0 (bit-and reg1 0x20))))
+
+(defn hblank-irq-enabled?
+  "Checks Bit 4 of VDP Register 0 to see if Line Interrupts (H-Blank IRQs) are enabled."
+  []
+  (let [vdp-regs ^ints (:regs @active-vdp)
+        reg0 (if (> (alength vdp-regs) 0) (aget vdp-regs 0) 0)]
+    (not= 0 (bit-and reg0 0x10))))
+
+(defn get-vdp-reg10
+  "Retrieves the value of VDP Register 10 (Scanline target)."
+  []
+  (let [vdp-regs ^ints (:regs @active-vdp)]
+    (if (> (alength vdp-regs) 10) (aget vdp-regs 10) 0)))
+
+;; Persistent frame canvas initialized matching standard dimensions 
+(def global-frame-buffer (atom nil))
+
+(defn do-instruction-loop!
+  "Executes a single PAL frame scanline-by-scanline, updating imagery dynamically.
+   
+   Drives the entire emulator's timing loop. It synchronizes Z80 CPU execution slices
+   with real-time raster scanline generations, allowing games to use mid-frame 
+   register writes (raster effects) for split-screen parallax scrolling or palette swapping."
+  [^com.codingrodent.microprocessor.Z80.Z80Core cpu
+   ^com.codingrodent.microprocessor.IMemory memory-bus]
+  (let [;; PAL Sega Master System metrics: 313 total scanlines per frame (0 to 312).
+        lines-per-frame 313
+        ;; Every scanline lasts exactly 228 CPU T-states (cycles). 
+        ;; Total frame footprint = 313 lines * 228 cycles = 71,364 cycles per frame (~50Hz).
+        cycles-per-line 228
+        ;; Track the internal line counter used to calculate H-Blank (Line) Interrupt timings
+        line-interrupt-counter (atom (get-vdp-reg10))
+        ;; Extract the raw PImage canvas object out of the thread atom container once per frame
+        frame-canvas ^processing.core.PImage @global-frame-buffer]
+    
+    ;; Open the direct 1D primitive pixel array for unchecked mutations
+    (.loadPixels frame-canvas)
+    
+    (dotimes [scanline lines-per-frame]
+      (let [start-tstates (.getTStates cpu)
+            target-tstates (+ start-tstates cycles-per-line)]
+        
+        ;; Keep VDP state synchronized with the current hardware horizontal raster layer
+        (swap! active-vdp assoc :current-scan-line scanline)
+        
+        ;; 1. PROCESS Z80 CPU INSTRUCTIONS FOR THIS SCANLINE
+        ;; Step the Z80 processor repeatedly until it consumes exactly 228 cycle T-states.
+        (loop []
+          (when (< (.getTStates cpu) target-tstates)
+            (.executeOneInstruction cpu)
+            (recur)))
+        
+        ;; 2. RUN SYNCHRONOUS LINE RENDERING ENGINE
+        ;; Only render within the standard 224-line high PImage texture canvas.
+        (when (< scanline 224)
+          (let [current-vdp @active-vdp
+                vdp-regs    ^ints (:regs current-vdp)
+                ;; Bit 3 of VDP Register 1 controls standard 192-line mode vs extended 224-line mode
+                reg1        (int (if (and vdp-regs (>= (alength vdp-regs) 2)) (aget vdp-regs 1) 0))
+                mode-224?   (not= 0 (bit-and reg1 0x08))
+                active-limit (if mode-224? 224 192)]
+            
+            ;; ALWAYS draw the background line. This ensures that when the system is in 192-line mode,
+            ;; lines 192 to 223 automatically drop into the overscan loop to draw a clean uniform border.
+            (draw-background-line! current-vdp frame-canvas scanline)
+            
+            ;; ONLY compute foreground sprites and run collision grid checks during active video display lines
+            (when (< scanline active-limit)
+              (draw-all-sprites-line-for-scanline! frame-canvas scanline mode-224?)
+              (swap! active-vdp check-sprite-collision!))))
+        
+        ;; 3. HANDLE H-BLANK COUNTER MECHANICS
+        ;; The VDP line counter decrements on every active scanline.
+        (if (<= scanline 192)
+          (let [current-count @line-interrupt-counter
+                new-count (dec current-count)]
+            ;; When the counter underflows below 0, reset it from VDP Register 10 and request a CPU interrupt.
+            (if (< new-count 0)
+              (do
+                (reset! line-interrupt-counter (get-vdp-reg10))
+                (when (hblank-irq-enabled?)
+                  (.setInterrupt cpu true)))
+              (reset! line-interrupt-counter new-count)))
+          ;; Outside the active window, the counter continually reloads from Register 10
+          (reset! line-interrupt-counter (get-vdp-reg10)))
+        
+        ;; 4. TRIGGER FRAME V-BLANK INTERRUPT SIGNALS
+        ;; Trigger V-Blank on line 193 (the first line after the standard active video window).
+        (when (= scanline 193)
+          (swap! active-vdp assoc :vblank-active? true)
+          (when (vblank-irq-enabled?)
+            (.setInterrupt cpu true)))
+        
+        ;; 5. END OF FRAME CLEANUP FILTER
+        ;; On the very last scanline of the PAL cycle loop, sanitize the image buffer pixels.
+        (when (= scanline 312)
+          (swap! active-vdp assoc :vblank-active? false)
+          (let [pixels-arr ^ints (.pixels frame-canvas)]
+            (dotimes [i (alength pixels-arr)]
+              ;; - (bit-and ... 0x00FFFFFF) completely strips out our internal layer sorting metadata mask.
+              ;; - (bit-or 0xFF000000 ...) sets Alpha back to 0xFF (100% opaque) so Quil doesn't render it as black.
+              ;; - Wrapped in unchecked-int to suppress Clojure's signed integer overflow arithmetic exceptions.
+              (aset pixels-arr i (unchecked-int (bit-or 0xFF000000 
+                                                        (bit-and (aget pixels-arr i) 0x00FFFFFF)))))))))
+    
+    ;; Finalize mutations and push the primitive pixel array modifications back into the Quil canvas
+    (.updatePixels frame-canvas)))
 
 ;; --------------------------------------------------------------------------------------------------
 ;; ------------------------------------------- Quil Setup -------------------------------------------
@@ -726,6 +811,7 @@
 (defn setup []
   ;; This should be the accurate FPS for a PAL console.
   (q/frame-rate 50)
+  (reset! global-frame-buffer (q/create-image 256 224 :rgb))
   ;; Reset the Sega Mapper to its standard power-on baseline state
   (reset! mapper-banks {:slot0 0
                         :slot1 1
@@ -746,14 +832,14 @@
   (.textureSampling (q/current-graphics) 2))
 
 (defn draw []
-  ;; Execute all 313 scanlines worth of Z80 code
+  ;; 1. Execute Z80 code line-by-line while filling 'global-frame-buffer'
   (do-instruction-loop! cpu memory-bus)
-  (let [background-image (draw-background-image! @active-vdp)
-        background-image-with-sprites (draw-sprites! background-image)]
-    ;; Force Nearest Neighbor sampling.
-    (set-nearest-neighbor!)
-    ;; Actually paint the complete image on the Quil canvas.
-    (q/image background-image-with-sprites 0 0 screen-width screen-height)))
+  
+  ;; 2. Force Nearest Neighbor sampling to preserve retro pixel art sharpness
+  (set-nearest-neighbor!)
+  
+  ;; 3. Paint the fully constructed frame directly from the persistent buffer
+  (q/image @global-frame-buffer 0 0 screen-width screen-height))
 
 ;; --------------------------------------------------------------------------------------------------
 ;; ----------------------------------------- JoyPad Handling ----------------------------------------
