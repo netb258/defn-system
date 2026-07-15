@@ -636,7 +636,7 @@
 (defn draw-all-sprites-line-for-scanline!
   "Takes a Quil image with the current background drawn on it.
    Basically draws a single line of all sprites matching the current scanline.
-   Scans all 64 potential hardware sprites and draws their line ONLY if they intersect the active scanline.
+   Scans all 64 potential sprites and draws their line ONLY if they intersect the active scanline.
    Returns the updated image with matching sprites applied."
   [background-image scanline mode-224?]
   (let [vdp                 @active-vdp
@@ -710,11 +710,15 @@
   (let [vdp-regs ^ints (:regs @active-vdp)]
     (if (> (alength vdp-regs) 10) (aget vdp-regs 10) 0)))
 
-;; Persistent frame canvas initialized matching standard dimensions 
+;; Persistent frame canvas initialized matching standard PAL dimensions 
+;; Every frame will be drawn here.
+;; We will initialize this in the quil 'setup' function like so:
+;; (reset! global-frame-buffer (q/create-image 256 224 :rgb))
 (def global-frame-buffer (atom nil))
 
 (defn do-instruction-loop!
-  "Executes a single PAL frame scanline-by-scanline, updating imagery dynamically."
+  "Executes a single PAL frame scanline-by-scanline (313 lines total).
+  Runs the CPU instructions and draws the graphics."
   [^com.codingrodent.microprocessor.Z80.Z80Core cpu
    ^com.codingrodent.microprocessor.IMemory memory-bus]
   (let [;; PAL Sega Master System metrics: 313 total scanlines per frame (0 to 312).
@@ -722,7 +726,8 @@
         ;; Every scanline lasts exactly 228 CPU T-states (cycles). 
         ;; Total frame footprint = 313 lines * 228 cycles = 71,364 cycles per frame (~50Hz).
         cycles-per-line 228
-        ;; Track the internal line counter used to calculate H-Blank (Line) Interrupt timings
+        ;; The VDP's register 10 holds a counter that is crucial the the timing of the H-BLANK.
+        ;; The Master System triggers an H-BLANK interrupt only if this counter rolls over below zero.
         line-interrupt-counter (atom (get-vdp-reg10))
         ;; Extract the raw PImage canvas object out of the thread atom container once per frame
         frame-canvas ^processing.core.PImage @global-frame-buffer]
@@ -744,8 +749,8 @@
             (.executeOneInstruction cpu)
             (recur)))
         
-        ;; 2. RUN SYNCHRONOUS LINE RENDERING ENGINE
-        ;; Only render within the standard 224-line high PImage texture canvas.
+        ;; 2. RUN LINE RENDERING FUNCTIONS
+        ;; Only render within the standard 224-line limit.
         (when (< scanline 224)
           (let [current-vdp @active-vdp
                 vdp-regs    ^ints (:regs current-vdp)
@@ -753,17 +758,15 @@
                 reg1        (int (if (and vdp-regs (>= (alength vdp-regs) 2)) (aget vdp-regs 1) 0))
                 mode-224?   (not= 0 (bit-and reg1 0x08))
                 active-limit (if mode-224? 224 192)]
-            
             ;; ALWAYS draw the background line. This ensures that when the system is in 192-line mode,
             ;; lines 192 to 223 automatically drop into the overscan loop to draw a clean uniform border.
             (draw-background-line! current-vdp frame-canvas scanline)
-            
             ;; ONLY compute foreground sprites and run collision grid checks during active video display lines
             (when (< scanline active-limit)
               (draw-all-sprites-line-for-scanline! frame-canvas scanline mode-224?)
               (swap! active-vdp check-sprite-collision!))))
         
-        ;; 3. HANDLE H-BLANK COUNTER MECHANICS
+        ;; 3. HANDLE H-BLANK
         ;; The VDP line counter decrements on every active scanline.
         (if (<= scanline 192)
           (let [current-count @line-interrupt-counter
@@ -771,15 +774,26 @@
             ;; When the counter underflows below 0, reset it from VDP Register 10 and request a CPU interrupt.
             (if (< new-count 0)
               (do
+                ;; Counter underflowed! Reload from VDP Register 10
                 (reset! line-interrupt-counter (get-vdp-reg10))
+                ;; Trigger CPU Interrupt if the game requested H-Blank IRQs
+                ;; We have just processed a whole single scan-line with the loop above.
+                ;; So, we can trigger an interrupt to let the game know there is a short time
+                ;; before we snap back and process another scan-line.
                 (when (hblank-irq-enabled?)
                   (.setInterrupt cpu true)))
+              ;; Decrement counter normally
               (reset! line-interrupt-counter new-count)))
           ;; Outside the active window, the counter continually reloads from Register 10
           (reset! line-interrupt-counter (get-vdp-reg10)))
         
-        ;; 4. TRIGGER FRAME V-BLANK INTERRUPT SIGNALS
-        ;; Trigger V-Blank on line 193 (the first line after the standard active video window).
+        ;; 4. HANDLE V-BLANK
+        ;; Trigger a VBlank on the last visible scanline, so that games have time to update
+        ;; before we go back to scanline 1 and start processing a new frame. This will be a significant pause.
+        ;; This is the longest most crucial synchronization event.
+        ;; During V-BLANK the VRAM is fully accessible without disrupting the display.
+        ;; Games use this window to: Update sprite positions (moving characters, enemies, projectiles),
+        ;; Load new tile graphics into VDP memory and more.
         (when (= scanline 193)
           (swap! active-vdp assoc :vblank-active? true)
           (when (vblank-irq-enabled?)
@@ -796,7 +810,6 @@
               ;; - Wrapped in unchecked-int to suppress Clojure's signed integer overflow arithmetic exceptions.
               (aset pixels-arr i (unchecked-int (bit-or 0xFF000000 
                                                         (bit-and (aget pixels-arr i) 0x00FFFFFF)))))))))
-    
     ;; Finalize mutations and push the primitive pixel array modifications back into the Quil canvas
     (.updatePixels frame-canvas)))
 
