@@ -799,7 +799,7 @@
           (when (vblank-irq-enabled?)
             (.setInterrupt cpu true)))
         
-        ;; 5. END OF FRAME CLEANUP FILTER
+        ;; 5. END OF FRAME CLEANUP
         ;; On the very last scanline of the PAL cycle loop, sanitize the image buffer pixels.
         (when (= scanline 312)
           (swap! active-vdp assoc :vblank-active? false)
