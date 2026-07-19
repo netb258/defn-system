@@ -13,8 +13,7 @@
   operation
   read-buffer
   current-scan-line
-  vblank-active?
-  sprite-collision?])
+  vblank-active?])
 
 (defn create-vdp []
   (map->VdpState {
@@ -28,7 +27,7 @@
     :read-buffer 0           ;; Small but fast 8bit VRAM cache.
     :current-scan-line 0     ;; This is basically the V-COUNTER.
     :vblank-active? false    ;; Is the CPU executing a V-BLANK interrupt currently?
-    :sprite-collision? false})) ;; Are any sprites colliding currently?
+    }))
 
 ;; As mentioned above, the VDP can operate in 4 modes:
 ;; Mode 0 (00): VRAM Read Mode - Used when the Z80 CPU wants to read graphics data out of the VDP's 16KB Video RAM.
@@ -123,7 +122,7 @@
              :vram-pointer new-loc
              :read-buffer updated-buffer
              :first-byte? false))
-    
+
     ;; Second byte received: Combine both to process command
     (let [low-byte (bit-and (:command-byte vdp) 0xFF)
           high-byte (bit-and value 0xFF)
@@ -157,14 +156,10 @@
 ;; The CPU needs to read from the status port, because it is important for timing and synchronization between the Z80 CPU and the VDP.
 
 (defn read-status-port! [^VdpState vdp ^Z80Core cpu]
-  ;; Check if V-Blank is actively triggered and also check for sprite collisions.
-  (let [vblank-bit (if (:vblank-active? vdp) 0x80 0x00)
-        collision-bit (if (:sprite-collision? vdp) 0x20 0x00)
-        current-status (bit-or vblank-bit collision-bit)]
+  (let [vblank-bit (if (:vblank-active? vdp) 0x80 0x00)]
     ;; Reading this port clears the CPU interrupt line.
     (.setInterrupt cpu false)
-    ;; Return the accumulated status byte and clear both flags on read
-    [current-status (assoc vdp 
-                           :first-byte? true 
-                           :vblank-active? false
-                           :sprite-collision? false)]))
+    ;; Return the status byte and clear both flags on read
+    [vblank-bit (assoc vdp 
+                       :first-byte? true 
+                       :vblank-active? false)]))
