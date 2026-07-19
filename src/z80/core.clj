@@ -52,8 +52,6 @@
                                 (let [[val updated-vdp] (vdp/read-status-port! vdp cpu)]
                                   (reset! result val)
                                   updated-vdp)))
-            ;; Clear the interrupt line.
-            (.setInterrupt ^com.codingrodent.microprocessor.Z80.Z80Core cpu false)
             @result)
 
           ;; Controller Ports
