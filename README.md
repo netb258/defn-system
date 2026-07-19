@@ -3,8 +3,14 @@ A Sega Master System Emulator written in Clojure. Runs commercial games.
 
 Uses a slightly modified version of the Z80Core found in this project: https://github.com/codesqueak/Z80Processor
 
-# Usage
+# Running the code
 lein run PATH_TO_ROM
+
+# Release version
+There is a JAR file in the release section that adds GUI to this emulator.
+It can be run like this:
+
+java -jar defn-system-with-gui.jar
 
 # Screenshots
 
