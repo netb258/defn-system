@@ -78,7 +78,7 @@
         overscan-color     (int (:overscan-color cfg))
         hide-left-8?       (boolean (:hide-left-8? cfg))
         vram-len           (int (alength vram-bytes))]
-    (fn [pixel-x pixel-y col-v-locked? row-h-locked?]
+    (fn [^long pixel-x ^long pixel-y col-v-locked? row-h-locked?]
       ;; 1. VERTICAL AXIS LOOKUPS
       ;; If vertical scroll locking is active (for column entries >= 24), bypass VDP scroll offsets.
       (let [actual-bg-y      (int (if col-v-locked? pixel-y (+ pixel-y base-scroll-y)))
