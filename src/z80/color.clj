@@ -2,9 +2,32 @@
   (:require [z80.memory :as memory]
             [quil.core :as q]))
 
+(defn- sms-color->rgb
+  "Converts a 6-bit SMS color byte (00BBGGRR) to a standard 24-bit RGB vector."
+  [sms-color-byte]
+  ;; Guarantee that we mask out any signed integer junk before splitting bits
+  (let [clean-byte (memory/signed->unsigned (int sms-color-byte))
+        r (bit-and clean-byte 0x03)                     ;; Lower 2 bits are Red
+        g (bit-shift-right (bit-and clean-byte 0x0C) 2) ;; Middle 2 bits are Green
+        b (bit-shift-right (bit-and clean-byte 0x30) 4) ;; Upper 2 bits are Blue
+        ;; Each channel scales from a 0-3 range up to 0-255 for Quil:
+        scale (fn [v] (int (* v 85)))]
+    [(scale r) (scale g) (scale b)]))
+
+(defn get-vdp-color-palette
+  "Checks the entire 32-byte CRAM memory of the VDP and returns all 32 colors.
+   Indices 0-15 are for backgrounds, indices 16-31 are for sprites."
+  ^ints [^ints vdp-cram-as-int-array]
+  (let [color-palette-cache (int-array 32)]
+    (dotimes [i 32]
+      (let [[r g b] (sms-color->rgb (aget vdp-cram-as-int-array i))]
+        (aset color-palette-cache i (int (q/color r g b)))))
+    color-palette-cache))
+
 (defn get-sms-pixel-color-idx
   "Extracts the exact 4-bit color palette index (0-15) for a specific 
-   horizontal pixel (0-7) in a 4bpp planar Sega Master System tile row."
+   horizontal pixel (0-7) in a 4bpp planar Sega Master System tile row.
+   Basically, get-vdp-color-palette returns an array and this function retruns an index in that array."
   ^long [^bytes vram tile-index row-y pixel-x]
   (let [;; Each 8x8 tile is stored as 4bpp (4 bits per pixel). 
         ;; 8 pixels * 4 bits = 32 bits (4 bytes) per vertical row.
@@ -36,25 +59,3 @@
             (bit-shift-left bit1 1)
             (bit-shift-left bit2 2)
             (bit-shift-left bit3 3))))
-
-(defn- sms-color->rgb
-  "Converts a 6-bit SMS color byte (00BBGGRR) to a standard 24-bit RGB vector."
-  [sms-color-byte]
-  ;; Guarantee that we mask out any signed integer junk before splitting bits
-  (let [clean-byte (memory/signed->unsigned (int sms-color-byte))
-        r (bit-and clean-byte 0x03)                     ;; Lower 2 bits are Red
-        g (bit-shift-right (bit-and clean-byte 0x0C) 2) ;; Middle 2 bits are Green
-        b (bit-shift-right (bit-and clean-byte 0x30) 4) ;; Upper 2 bits are Blue
-        ;; Each channel scales from a 0-3 range up to 0-255 for Quil:
-        scale (fn [v] (int (* v 85)))]
-    [(scale r) (scale g) (scale b)]))
-
-(defn get-vdp-color-palette
-  "Checks the entire 32-byte CRAM memory of the VDP and returns all 32 colors.
-   Indices 0-15 are for backgrounds, indices 16-31 are for sprites."
-  ^ints [^ints vdp-cram-as-int-array]
-  (let [color-palette-cache (int-array 32)]
-    (dotimes [i 32]
-      (let [[r g b] (sms-color->rgb (aget vdp-cram-as-int-array i))]
-        (aset color-palette-cache i (int (q/color r g b)))))
-    color-palette-cache))
