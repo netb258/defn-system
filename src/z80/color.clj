@@ -28,7 +28,7 @@
   "Extracts the exact 4-bit color palette index (0-15) for a specific 
    horizontal pixel (0-7) in a 4bpp planar Sega Master System tile row.
    Basically, get-vdp-color-palette returns an array and this function retruns an index in that array."
-  ^long [^bytes vram tile-index row-y pixel-x]
+  ^long [^bytes vram ^long tile-index ^long row-y ^long pixel-x]
   (let [;; Each 8x8 tile is stored as 4bpp (4 bits per pixel). 
         ;; 8 pixels * 4 bits = 32 bits (4 bytes) per vertical row.
         ;; Therefore, a single 8x8 tile takes up exactly 32 bytes of VRAM.
