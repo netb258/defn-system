@@ -324,47 +324,43 @@
    Scans all 64 potential sprites and draws their line ONLY if they intersect the active scanline.
    Returns the updated image with matching sprites applied."
   [background-image ^z80.vdp.VdpState vdp-state scanline mode-224?]
-  (let [vdp                 vdp-state
-        vram-bytes          ^bytes (:vram vdp)
-        cram-ints           ^ints (:cram vdp)
-        vdp-regs            ^ints (:regs vdp)
-        color-palette-cache ^ints (color/get-vdp-color-palette cram-ints)
-        img-pixels          ^ints (.pixels ^processing.core.PImage background-image)
+  (let [vram-bytes          ^bytes (:vram vdp-state)
+        cram-ints           ^ints  (:cram vdp-state)
+        vdp-regs            ^ints  (:regs vdp-state)
+        color-palette-cache ^ints  (color/get-vdp-color-palette cram-ints)
+        img-pixels          ^ints  (.pixels ^processing.core.PImage background-image)
         vram-len            (int (alength vram-bytes))
-        ;; Parse and gather VDP constraints into a single memory block record
-        ^SpriteData ctx     (parse-sprite-data vdp vdp-regs vram-bytes color-palette-cache img-pixels)
+        ;; Parse and gather VDP constraints into a single record
+        ^SpriteData ctx     (parse-sprite-data vdp-state vdp-regs vram-bytes color-palette-cache img-pixels)
         sat-base-addr       (int (.-sat-base-addr ctx))
         sat-info-table      (int (.-sat-info-table ctx))
         sprite-height       (int (if (.-large-sprites? ctx) 16 8))]
 
     ;; Loop through all 64 possible sprite descriptors stored inside the Sprite Attribute Table (SAT)
-    (loop [sprite-id (int 0)]
-      (when (< sprite-id 64)
-        (let [y-addr (int (+ sat-base-addr sprite-id))
-              raw-y  (int (if (< y-addr vram-len) (memory/signed->unsigned (aget vram-bytes y-addr)) 0))]
-          
-          ;; A vertical coordinate entry of 0xD0 signals the VDP to drop subsequent sprite calculations.
-          ;; Real SMS Exception: This rule is disabled completely when running in extended 224-line mode.
-          (when (or mode-224? (not= raw-y 0xD0))
-            (let [;; Internal SMS quirk: Y positions in the SAT are offset by -1.
-                  ;; Adding 1 aligns the execution cleanly to target screen spaces.
-                  sprite-y (int (inc raw-y))
-                  ;; Measure distance from current scanline to evaluate intersection matrix bounds
-                  fine-y   (int (- scanline sprite-y))]
-              
-              ;; VERTICAL SCANLINE INTERSECTION EVALUATION
-              (when (and (>= fine-y 0) (< fine-y sprite-height))
-                (let [info-idx       (int (* sprite-id 2))
-                      x-addr         (int (+ sat-info-table info-idx))
-                      ;; In the secondary SAT structure, the pattern/tile index is the byte right after the X coordinate
-                      tile-addr      (int (inc x-addr))
-                      
-                      ;; Fetch properties from secondary SAT tracking offset arrays (X coordinates & Tile indices)
-                      sprite-x       (int (if (< x-addr vram-len) (memory/signed->unsigned (aget vram-bytes x-addr)) 0))
-                      raw-tile-index (int (if (< tile-addr vram-len) (memory/signed->unsigned (aget vram-bytes tile-addr)) 0))]
-                  
-                  ;; Fire single-row renderer for matching intersection targets
-                  (draw-single-sprite-line! ctx sprite-x raw-tile-index fine-y scanline)))
-              
-              ;; Advance to parse the next sprite entry block
-              (recur (inc sprite-id)))))))))
+    ;; 1. First, find which sprites actually hit this scanline (up to the 8-sprite limit)
+    ;; They will be returned as a verctor of maps.
+    (let [matching-sprites
+          (loop [sprite-id (int 0) acc []]
+            (if (and (< sprite-id 64) (< (count acc) 8)) ; Stop at 64 sprites OR 8 matches
+              (let [y-addr (int (+ sat-base-addr sprite-id))
+                    raw-y  (int (if (< y-addr vram-len) (memory/signed->unsigned (aget vram-bytes y-addr)) 0))]
+                (if (and (not mode-224?) (= raw-y 0xD0)) acc ;; A vertical coordinate entry of 0xD0 signals the VDP to drop subsequent sprite calculations.
+                  (let [sprite-y (int (inc raw-y))
+                        fine-y   (int (- scanline sprite-y))]
+                    ;; VERTICAL SCANLINE INTERSECTION CHECK
+                    (if (and (>= fine-y 0) (< fine-y sprite-height))
+                      ;; Sprite intersects with scanline. Gather its data and continue.
+                      (let [info-idx       (int (* sprite-id 2))
+                            x-addr         (int (+ sat-info-table info-idx))
+                            tile-addr      (int (inc x-addr))
+                            sprite-x       (int (if (< x-addr vram-len) (memory/signed->unsigned (aget vram-bytes x-addr)) 0))
+                            raw-tile-index (int (if (< tile-addr vram-len) (memory/signed->unsigned (aget vram-bytes tile-addr)) 0))]
+                        (recur (inc sprite-id) (conj acc {:x sprite-x :tile raw-tile-index :fine-y fine-y})))
+                      ;; Didn't intersect, just check the next sprite
+                      (recur (inc sprite-id) acc)))))
+              acc))]
+
+      ;; 2. DRAW BACKWARD: Iterate from the end of our list back to index 0
+      ;; This guarantees Sprite 0 details overwrite higher indices on the canvas!
+      (doseq [sprite (rseq matching-sprites)]
+        (draw-single-sprite-line! ctx (:x sprite) (:tile sprite) (:fine-y sprite) scanline)))))
