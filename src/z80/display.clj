@@ -320,9 +320,9 @@
 
 (defn draw-all-sprites-line-for-scanline!
   "Takes a Quil image with the current background drawn on it.
-   Basically draws a single line of all sprites matching the current scanline.
-   Scans all 64 potential sprites and draws their line ONLY if they intersect the active scanline.
-   Returns the updated image with matching sprites applied."
+  Basically draws a single line of all sprites matching the current scanline.
+  Scans all 64 potential sprites and draws their line ONLY if they intersect the active scanline.
+  Returns the updated image with matching sprites applied."
   [background-image ^z80.vdp.VdpState vdp-state scanline mode-224?]
   (let [vram-bytes          ^bytes (:vram vdp-state)
         cram-ints           ^ints  (:cram vdp-state)
@@ -339,7 +339,9 @@
     ;; Loop through all 64 possible sprite descriptors stored inside the Sprite Attribute Table (SAT)
     ;; 1. First, find which sprites actually hit this scanline (up to the 8-sprite limit)
     ;; They will be returned as a verctor of maps.
-    (let [matching-sprites
+    (let [reg0 (aget vdp-regs 0) ;; Read Register 0 to check for the Early Clock (EC) Sprite Shift flag (Bit 3)
+          early-clock-shift? (not= 0 (bit-and reg0 0x08))
+          matching-sprites
           (loop [sprite-id (int 0) acc []]
             (if (and (< sprite-id 64) (< (count acc) 8)) ; Stop at 64 sprites OR 8 matches
               (let [y-addr (int (+ sat-base-addr sprite-id))
@@ -354,8 +356,11 @@
                             x-addr         (int (+ sat-info-table info-idx))
                             tile-addr      (int (inc x-addr))
                             sprite-x       (int (if (< x-addr vram-len) (memory/signed->unsigned (aget vram-bytes x-addr)) 0))
-                            raw-tile-index (int (if (< tile-addr vram-len) (memory/signed->unsigned (aget vram-bytes tile-addr)) 0))]
-                        (recur (inc sprite-id) (conj acc {:x sprite-x :tile raw-tile-index :fine-y fine-y})))
+                            raw-tile-index (int (if (< tile-addr vram-len) (memory/signed->unsigned (aget vram-bytes tile-addr)) 0))
+                            ;; Shift left by 8 pixels only when the VDP Early Clock (Register 0, Bit 3) is active.
+                            base-x-offset  (int (if early-clock-shift? -8 0))
+                            corrected-x    (+ sprite-x base-x-offset)]
+                        (recur (inc sprite-id) (conj acc {:x corrected-x :tile raw-tile-index :fine-y fine-y})))
                       ;; Didn't intersect, just check the next sprite
                       (recur (inc sprite-id) acc)))))
               acc))]
