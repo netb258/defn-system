@@ -13,7 +13,13 @@
 ;; The program will perform a lot worse with reflection, so we should add type hints where possible.
 ;; (set! *warn-on-reflection* true)
 
-;; Initialize a reference to the VDP
+;; The io-bus will need to communicate with the CPU, even though we have not composed it yet.
+;; We can't compose the CPU yet, because we must pass it both a memory-bus and an io-bus.
+(declare cpu)
+
+;; Construct the VDP record.
+;; The VDP does not need to be passed when we construct the CPU.
+;; The CPU will read data from and write data to the VDP through the io-bus.
 (def active-vdp (atom (vdp/create-vdp)))
 
 (defn- do-vdp-io-read!
@@ -26,9 +32,6 @@
                         (reset! result val)
                         updated-vdp)))
     @result))
-
-;; The io-bus will need to communicate with the CPU, even though we have not composed it yet.
-(declare cpu)
 
 ;; --- SEGA MASTER SYSTEM I/O BUS ---
 ;; SMS components like Video (VDP) and Joypads are hooked up to the ports here.
