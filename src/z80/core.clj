@@ -16,56 +16,71 @@
 ;; Initialize a reference to the VDP
 (def active-vdp (atom (vdp/create-vdp)))
 
+(defn- do-vdp-io-read!
+  "Calls either vdp/read-status-port! or vdp/data-read! (the two VDP io reading functions).
+   Puts the VDP in a new state and returns the result byte that these read functions return."
+  [^z80.vdp.VdpState atom-vdp read-fn & args]
+  (let [result (atom nil)]
+    (swap! atom-vdp (fn [vdp]
+                      (let [[val updated-vdp] (apply read-fn vdp args)]
+                        (reset! result val)
+                        updated-vdp)))
+    @result))
+
 ;; The io-bus will need to communicate with the CPU, even though we have not composed it yet.
 (declare cpu)
 
 ;; --- SEGA MASTER SYSTEM I/O BUS ---
 ;; SMS components like Video (VDP) and Joypads are hooked up to the ports here.
 
-;; NOTE: The IO-BUS turned out to be just one function. Instead of needlessly making it a module, I'm just dropping it here:
 (defn make-io-bus []
   (reify IBaseDevice
     (IORead [this address]
-      (let [port (memory/signed->unsigned address)]
+      (let [port (memory/signed->unsigned address)
+            ;; Decode ports by their upper 2 bits (4 main blocks)
+            port-group (bit-and port 0xC0)] 
         (cond
-          ;; --- VDP V-COUNTER PORT (PAL 50Hz MODE) ---
-          ;; Returns the current vertical scanline coordinate.
-          ;; Total PAL frame = 71040 cycles across 313 scanlines (~227.13 cycles per line).
-          (= port 0x7E) (vdp/get-v-counter @active-vdp)
-          ;; --- VDP H-COUNTER PORT (PAL 50Hz MODE) ---
-          ;; Returns the current horizontal scanline coordinate.
-          (= port 0x7F) (vdp/calculate-h-counter cpu)
-          ;; --- VDP DATA PORT ---
-          (= port 0xBE)
-          (let [result (atom 0x00)]
-            (swap! active-vdp (fn [vdp]
-                                (let [[val updated-vdp] (vdp/data-read! vdp)]
-                                  (reset! result val)
-                                  updated-vdp)))
-            @result)
+          ;; --- Group 0x00 to 0x3F ---
+          (= port-group 0x00)
+          (if (even? port)
+            0xFF ;; Port $00 is generally unmapped/read-only export status or open bus
+            (vdp/get-v-counter @active-vdp)) ;; Odd ports ($01-$3F) return V-Counter!
 
-          ;; --- VDP STATUS PORT ---
-          ;; Clears the Vblank flag inside the VDP.
-          (= port 0xBF)
-          (let [result (atom 0x00)]
-            (swap! active-vdp (fn [vdp]
-                                (let [[val updated-vdp] (vdp/read-status-port! vdp cpu)]
-                                  (reset! result val)
-                                  updated-vdp)))
-            @result)
+          ;; --- Group 0x40 to 0x7F ---
+          (= port-group 0x40)
+          (if (even? port)
+            ;; NOTE: The v-counter is basically the current scan-line
+            ;; The h-counter is the current pixel within that scan-line.
+            (vdp/get-v-counter @active-vdp) ;; Even ports ($40-$7E) = V-Counter
+            (vdp/calculate-h-counter cpu))  ;; Odd ports ($41-$7F)  = H-Counter
 
-          ;; Controller Ports
-          (= port 0xDC) (joypads/read-joypad1)
-          (= port 0xDD) (joypads/read-joypad2)
+          ;; --- Group 0x80 to 0xBF ---
+          (= port-group 0x80)
+          (if (even? port)
+            ;; VDP DATA PORT ($BE)
+            (do-vdp-io-read! active-vdp vdp/data-read!)
+            ;; VDP STATUS PORT ($BF)
+            (do-vdp-io-read! active-vdp vdp/read-status-port! cpu))
+
+          ;; --- Group 0xC0 to 0xFF ---
+          (= port-group 0xC0)
+          (if (even? port)
+            (joypads/read-joypad1) ;; Even ports ($DC) = P1 Input
+            (bit-or (joypads/read-joypad2) 0x80)) ;; Odd ports ($DD)  = P2 Input + Export (non Japan) Bit (Bit 7 = 1)
+
           :else 0xFF)))
 
     (IOWrite [this address data]
-      (let [port (memory/signed->unsigned address)]
+      (let [port (memory/signed->unsigned address)
+            port-group (bit-and port 0xC0)]
         (cond
-          (= port 0xBE) (swap! active-vdp vdp/data-write! (unchecked-byte data))
+          ;; VDP Writes ($80-$BF)
           ;; NOTE: port 0xBF pulls double duty depending on whether the Z80 CPU is writing to it or reading from it.
           ;; When reading, it serves as the status port. When writing it is the control port.
-          (= port 0xBF) (swap! active-vdp vdp/control-write! data))
+          (= port-group 0x80)
+          (if (even? port)
+            (swap! active-vdp vdp/data-write! (unchecked-byte data))
+            (swap! active-vdp vdp/control-write! data)))
         nil))))
 
 ;; Instantiate the CPU with both Memory and IO Bus
