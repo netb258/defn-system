@@ -152,13 +152,14 @@
         :else (assoc vdp :first-byte? true)))))
 
 ;; When the Z80 CPU fires an interrupt, the game code can't easily tell the reason why the interrupt happened.
-;; It's part of the VDP's job to keep track of when interrupts are fired for graphical reasons.
-;; This way the game code can read the status port $BF and receive a byte flag that tells it the reason for the interrupt.
+;; It's part of the VDP's job to keep track of when interrupts are fired because of a graphical VBLank event.
+;; This way the game code can read the status port $BF and receive a byte flag
+;; that tells it if the current interrupt is a VBlank interrupt.
+;; Note that there is no corresponding status code for HBlank. Instead a counter in VDP register 10 is used.
 
 (defn read-status-port! [^VdpState vdp ^Z80Core cpu]
   (let [vblank-byte 0x80
-        hblank-byte 0x00
-        return-byte (if (:vblank-active? vdp) vblank-byte hblank-byte)]
+        return-byte (if (:vblank-active? vdp) vblank-byte 0x00)]
     ;; Reading this port clears the CPU interrupt line.
     (.setInterrupt cpu false)
     ;; We return the status byte.
