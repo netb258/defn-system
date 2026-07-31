@@ -1,7 +1,5 @@
 (ns z80.vdp
-  (:import [com.codingrodent.microprocessor IMemory IBaseDevice]
-           [com.codingrodent.microprocessor.Z80 Z80Core]
-           [com.codingrodent.microprocessor.Z80 CPUConstants$RegisterNames]))
+  (:import [com.codingrodent.microprocessor.Z80 Z80Core]))
 
 (defrecord VdpState [
   vram
@@ -99,7 +97,7 @@
                        :first-byte? true)]))
 
 ;; Before the Z80 can instruct the VDP to perform one of it's 4 modes (VRAM Read, VRAM Write, VDP Register Write, CRAM Write)
-;; it must first write two bytes to the VDP control port (status port). Those two bytes will set the VDP in the proper state
+;; it must first write two bytes to the VDP control port. Those two bytes will set the VDP in the proper state
 ;; to perform an upcoming VRAM Read, VRAM Write, VDP Register Write or CRAM Write.
 ;; This is exactly what this function does.
 ;; It parses the two byte command and sets the VDP in the proper state to execute one of it's modes.
@@ -153,13 +151,16 @@
         (= code-type 3) (assoc vdp :vram-pointer new-loc :operation 3 :first-byte? true)
         :else (assoc vdp :first-byte? true)))))
 
-;; The CPU needs to read from the status port, because it is important for timing and synchronization between the Z80 CPU and the VDP.
+;; When the Z80 CPU fires an interrupt, the game code can't easily tell the reason why the interrupt happened.
+;; It's part of the VDP's job to keep track of when interrupts are fired for graphical reasons.
+;; This way the game code can read the status port $BF and receive a byte flag that tells it the reason for the interrupt.
 
 (defn read-status-port! [^VdpState vdp ^Z80Core cpu]
-  (let [vblank-bit (if (:vblank-active? vdp) 0x80 0x00)]
+  (let [vblank-byte 0x80
+        hblank-byte 0x00
+        return-byte (if (:vblank-active? vdp) vblank-byte hblank-byte)]
     ;; Reading this port clears the CPU interrupt line.
     (.setInterrupt cpu false)
-    ;; Return the status byte and clear both flags on read
-    [vblank-bit (assoc vdp 
-                       :first-byte? true 
-                       :vblank-active? false)]))
+    ;; We return the status byte.
+    ;; However, the VDP must also transition to a new state.
+    [return-byte (assoc vdp :first-byte? true :vblank-active? false)]))
