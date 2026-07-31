@@ -7,6 +7,11 @@
 ;; --------------------------------------- Z80 Instruction Loop -------------------------------------
 ;; --------------------------------------------------------------------------------------------------
 
+;; This will serve as our frame canvas. Every frame will be drawn here.
+;; We will initialize this in the quil 'setup' function like so:
+;; (reset! global-frame-buffer (q/create-image 256 224 :rgb))
+(def ^:private global-frame-buffer (atom nil))
+
 (defn- vblank-irq-enabled?
   "Checks the VDP's internal Register 1 state to see if the Sega Master System 
    hardware has enabled V-Blank Frame Interrupt requests."
@@ -28,12 +33,6 @@
   [^z80.vdp.VdpState vdp]
   (let [vdp-regs ^ints (:regs vdp)]
     (if (> (alength vdp-regs) 10) (aget vdp-regs 10) 0)))
-
-;; Persistent frame canvas initialized matching standard PAL dimensions 
-;; Every frame will be drawn here.
-;; We will initialize this in the quil 'setup' function like so:
-;; (reset! global-frame-buffer (q/create-image 256 224 :rgb))
-(def ^:private global-frame-buffer (atom nil))
 
 (defn- do-instruction-loop!
   "Executes a single PAL frame scanline-by-scanline (313 lines total).
@@ -154,7 +153,7 @@
   (fn []
     ;; 1. Execute Z80 code line-by-line while filling 'global-frame-buffer'
     (do-instruction-loop! cpu vdp)
-    ;; 2. Force Nearest Neighbor sampling to preserve retro pixel art sharpness
+    ;; 2. Force Nearest Neighbor sampling. I want the image blocky.
     (set-nearest-neighbor!)
     ;; 3. Paint the fully constructed frame directly from the buffer
     (q/image @global-frame-buffer 0 0 display/screen-width display/screen-height)))
