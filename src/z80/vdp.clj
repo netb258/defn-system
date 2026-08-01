@@ -11,6 +11,8 @@
   operation
   read-buffer
   current-scan-line
+  sprite-overflow?
+  sprite-collision?
   vblank-active?])
 
 (defn create-vdp []
@@ -24,6 +26,8 @@
     :operation 0             ;; Remembers the current mode (0, 1, 2, or 3) that the VDP is operating in.
     :read-buffer 0           ;; Small but fast 8bit VRAM cache.
     :current-scan-line 0     ;; This is basically the V-COUNTER.
+    :sprite-overflow? false  ;; The Master System can only have 8 sprites on a single scan-line. The VDP should report if this limit is exceeded.
+    :sprite-collision? false ;; Are any sprites colliding currently?
     :vblank-active? false    ;; Is the CPU executing a V-BLANK interrupt currently?
     }))
 
@@ -54,7 +58,7 @@
       h-val
       (bit-and (+ 202 (- h-val 226)) 0xFF))))
 
-;; NOTE: IN the following code, you will see this alot (bit-and some-vram-address 0x3FFF).
+;; NOTE: IN the following code, you will see this a lot (bit-and some-vram-address 0x3FFF).
 ;; The reason for this is that the vram pointer is 14 bits long and doesn't fit neatly into standard bytes and words (8 and 16 bits).
 
 (defn data-write! [^VdpState vdp ^long value]
@@ -151,17 +155,28 @@
         (= code-type 3) (assoc vdp :vram-pointer new-loc :operation 3 :first-byte? true)
         :else (assoc vdp :first-byte? true)))))
 
+;; NOTE: The VDP status port should report a few statuses. First and foremost:
 ;; When the Z80 CPU fires an interrupt, the game code can't easily tell the reason why the interrupt happened.
 ;; It's part of the VDP's job to keep track of when interrupts are fired because of a graphical VBLank event.
 ;; This way the game code can read the status port $BF and receive a byte flag
 ;; that tells it if the current interrupt is a VBlank interrupt.
 ;; Note that there is no corresponding status code for HBlank. Instead a counter in VDP register 10 is used.
 
+;; The other two statuses (Sprite Collision and Sprite Overflow) are rarely used by comparison, but they are included.
+;; The Sprite collision flag does sound important, but in practice most games just use their own collision logic.
+
 (defn read-status-port! [^VdpState vdp ^Z80Core cpu]
-  (let [vblank-byte 0x80
-        return-byte (if (:vblank-active? vdp) vblank-byte 0x00)]
+  ;; Check if V-Blank is actively triggered and also check for sprite collisions and overflows.
+  (let [vblank-bit    (if (:vblank-active? vdp) 0x80 0x00)
+        overflow-bit  (if (:sprite-overflow? vdp) 0x40 0x00)
+        collision-bit (if (:sprite-collision? vdp) 0x20 0x00)
+        ;; When the CPU reads the VDP status port it must receive this combined status byte.
+        current-status (bit-or vblank-bit overflow-bit collision-bit)]
     ;; Reading this port clears the CPU interrupt line.
     (.setInterrupt cpu false)
-    ;; We return the status byte.
-    ;; However, the VDP must also transition to a new state.
-    [return-byte (assoc vdp :first-byte? true :vblank-active? false)]))
+    ;; Return the accumulated status byte and reset VDP status flags.
+    [current-status (assoc vdp 
+                           :first-byte? true 
+                           :vblank-active? false
+                           :sprite-overflow? false
+                           :sprite-collision? false)]))
