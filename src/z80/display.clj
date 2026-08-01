@@ -257,28 +257,37 @@
     (SpriteData. visible-height sat-base-addr sat-info-table sprite-tile-base 
                           large-sprites? vram-bytes color-palette-cache img-pixels)))
 
+;; NOTE: The sprite drawing functions will also perform VDP collision detection.
 (defn- draw-single-sprite-line!
   "Renders only a SINGLE horizontal row of a SINGLE sprite matching the current scanline.
    This function draws one horizontal row of 8 pixels for one individual sprite on the current scanline.
 
    Note that the image buffer inside our SpriteData is a primitive array, ensuring high-speed rendering.
    Loops across the 8 horizontal pixels of the matching row to perform transparency,
-   clipping, and priority evaluations against pre-rendered background metadata."
-  [^SpriteData ctx pixel-x raw-tile-index fine-y current-screen-y]
+   clipping, and priority evaluations against pre-rendered background.
+   
+   Tracks hardware sprite-on-sprite pixel collisions using Bit 29 (0x20000000) in the current background layer.
+   For every horizontal pixel in the sprite (8 in total)
+   we are setting a single unused bit in the background layer (matching the same coordinates) to 1.
+   When the function gets called again, to draw another sprite line,
+   it will check the background layer bit and if it's already 1, then we have a sprite collision.
+
+   NOTE, that we never clear the background layer bit to 0.
+   It will be reset to 0 naturally when a new frame is drawn with a fresh background."
+  [^SpriteData ctx pixel-x raw-tile-index fine-y current-screen-y collision-atom]
   ;; Extract context fields directly from the primitive record to avoid reflection or map lookups
-  (let [sx                 (int pixel-x)
-        sprite-tile-base   (int (.-sprite-tile-base ctx))
-        large-sprites?     (boolean (.-large-sprites? ctx))
-        vram-bytes         ^bytes (.-vram-bytes ctx)
+  (let [sx                  (int pixel-x)
+        sprite-tile-base    (int (.-sprite-tile-base ctx))
+        large-sprites?      (boolean (.-large-sprites? ctx))
+        vram-bytes          ^bytes (.-vram-bytes ctx)
         color-palette-cache ^ints (.-color-palette-cache ctx)
-        img-pixels         ^ints (.-img-pixels ctx)
+        img-pixels          ^ints (.-img-pixels ctx)
         
         ;; 1. 8x16 SPRITE TILE INDEX CALCULATIONS
-        ;; Real SMS Rule: In 8x16 mode, the tile index specified in the SAT applies to the top half.
-        ;; The VDP automatically forces an index increment for the bottom half tile pattern row.
         tile-offset        (int (quot fine-y 8))
         actual-tile-index  (int (if large-sprites? 
-                                  (+ (int (memory/signed->unsigned raw-tile-index)) tile-offset) 
+                                  ;; SMS Hardware Rule: Force bit 0 to 0 for 8x16 sprites
+                                  (+ (bit-and (int (memory/signed->unsigned raw-tile-index)) 0xFE) tile-offset) 
                                   raw-tile-index))
         final-sprite-tile  (int (+ actual-tile-index sprite-tile-base))
         tile-fine-y        (int (mod fine-y 8))
@@ -287,54 +296,65 @@
     ;; 2. HORIZONTAL PIXEL LOOP
     (dotimes [x 8]
       (let [color-idx (int (color/get-sms-pixel-color-idx vram-bytes final-sprite-tile tile-fine-y (int x)))]
-        ;; Hardware Rule: Sprite color index 0 is always transparent and does not paint.
+        ;; Hardware Rule: Sprite color index 0 is always transparent and does not paint or cause collisions.
         (when (> color-idx 0)
           (let [current-screen-x (int (+ sx (int x)))]
             ;; Boundary protection against offscreen horizontal coordinates (viewport clipping)
             (when (and (>= current-screen-x 0) (< current-screen-x 256))
-              (let [dest-idx         (int (+ dest-row-offset current-screen-x))
+              (let [dest-idx (int (+ dest-row-offset current-screen-x))
                     
-                    ;; 3. DECODE BACKGROUND LAYER METADATA
+                    ;; 3. DECODE BACKGROUND LAYER METADATA AND CHECK FOR COLLISION
                     ;; Wrap read values in unchecked-int to bypass safe integer conversion traps.
                     bg-pixel-raw     (unchecked-int (aget img-pixels dest-idx))
+
+                    ;; HARDWARE COLLISION CHECK: If Bit 29 is already set, another sprite's pixel is here!
+                    _ (when (not= 0 (bit-and bg-pixel-raw 0x20000000))
+                        (reset! collision-atom true))
+
+                    ;; Inject Bit 29 into our metadata track to flag this coordinate for future sprites
+                    marked-bg-pixel (unchecked-int (bit-or bg-pixel-raw 0x20000000))
+
                     ;; Extract 4-bit color index stored at bits 25-28 of the background pixel
                     bg-color-idx     (int (bit-and (bit-shift-right bg-pixel-raw 25) 0x0F))
                     ;; Extract 1-bit background priority flag stored at bit 24
                     bg-has-priority? (not= 0 (bit-and bg-pixel-raw 0x01000000))
-                    
+
                     ;; 4. EVALUATE LAYER MIXING PRIORITY
-                    ;; The sprite wins if the background tile lacks priority,
-                    ;; OR if the background tile has priority but this individual pixel is transparent (index 0).
                     should-draw?     (or (not bg-has-priority?) 
                                          (= bg-color-idx 0))]
-                
-                (when should-draw?
+
+                (if should-draw?
                   (let [;; SMS sprites map exclusively to the second 16-color block of the system palette
                         sprite-color-idx (int (+ color-idx 16))
                         pixel-color      (int (aget color-palette-cache sprite-color-idx))]
                     ;; Commit pixel to frame buffer array:
-                    ;; - Keep bits 24-31 unchanged (retains background metadata for subsequent calculations)
+                    ;; - Keep bits 24-31 unchanged (retains background AND our newly set sprite collision metadata)
                     ;; - Overwrite bits 0-23 with the new 24-bit sprite RGB values
-                    (aset img-pixels dest-idx (bit-or (bit-and bg-pixel-raw 0xFF000000) 
-                                                      (bit-and pixel-color 0x00FFFFFF)))))))))))))
+                    (aset img-pixels dest-idx (bit-or (bit-and marked-bg-pixel 0xFF000000) 
+                                                      (bit-and pixel-color 0x00FFFFFF))))
+                  ;; Even if hidden by background priority, write back the marked metadata 
+                  ;; because overlapping hidden sprites STILL trigger collisions!
+                  (aset img-pixels dest-idx marked-bg-pixel))))))))))
 
 (defn draw-all-sprites-line-for-scanline!
   "Takes a Quil image with the current background drawn on it.
-  Basically draws a single line of all sprites matching the current scanline.
-  Scans all 64 potential sprites and draws their line ONLY if they intersect the active scanline.
-  Returns the updated image with matching sprites applied."
-  [background-image ^z80.vdp.VdpState vdp-state scanline mode-224?]
-  (let [vram-bytes          ^bytes (:vram vdp-state)
-        cram-ints           ^ints  (:cram vdp-state)
-        vdp-regs            ^ints  (:regs vdp-state)
+   Basically draws a single line of all sprites matching the current scanline.
+   Scans all 64 potential sprites and draws their line ONLY if they intersect the active scanline.
+   Returns the updated image with matching sprites applied."
+  [background-image vdp-atom scanline mode-224?]
+  (let [vram-bytes          ^bytes (:vram @vdp-atom)
+        cram-ints           ^ints  (:cram @vdp-atom)
+        vdp-regs            ^ints  (:regs @vdp-atom)
         color-palette-cache ^ints  (color/get-vdp-color-palette cram-ints)
         img-pixels          ^ints  (.pixels ^processing.core.PImage background-image)
         vram-len            (int (alength vram-bytes))
         ;; Parse and gather VDP constraints into a single record
-        ^SpriteData ctx     (parse-sprite-data vdp-state vdp-regs vram-bytes color-palette-cache img-pixels)
+        ^SpriteData ctx     (parse-sprite-data @vdp-atom vdp-regs vram-bytes color-palette-cache img-pixels)
         sat-base-addr       (int (.-sat-base-addr ctx))
         sat-info-table      (int (.-sat-info-table ctx))
-        sprite-height       (int (if (.-large-sprites? ctx) 16 8))]
+        sprite-height       (int (if (.-large-sprites? ctx) 16 8))
+        ;; Local mutable accumulator thread context to collect line intersections safely
+        collision-triggered? (atom false)]
 
     ;; Loop through all 64 possible sprite descriptors stored inside the Sprite Attribute Table (SAT)
     ;; 1. First, find which sprites actually hit this scanline (up to the 8-sprite limit)
@@ -343,7 +363,7 @@
           early-clock-shift? (not= 0 (bit-and reg0 0x08))
           matching-sprites
           (loop [sprite-id (int 0) acc []]
-            (if (and (< sprite-id 64) (< (count acc) 8)) ; Stop at 64 sprites OR 8 matches
+            (if (and (< sprite-id 64)) ; Stop at 64 sprites
               (let [y-addr (int (+ sat-base-addr sprite-id))
                     raw-y  (int (if (< y-addr vram-len) (memory/signed->unsigned (aget vram-bytes y-addr)) 0))]
                 (if (and (not mode-224?) (= raw-y 0xD0)) acc ;; A vertical coordinate entry of 0xD0 signals the VDP to drop subsequent sprite calculations.
@@ -367,5 +387,13 @@
 
       ;; 2. DRAW BACKWARD: Iterate from the end of our list back to index 0
       ;; This guarantees Sprite 0 details overwrite higher indices on the canvas!
-      (doseq [sprite (rseq matching-sprites)]
-        (draw-single-sprite-line! ctx (:x sprite) (:tile sprite) (:fine-y sprite) scanline)))))
+      (doseq [sprite (reverse (take 8 matching-sprites))]
+        (draw-single-sprite-line! ctx (:x sprite) (:tile sprite) (:fine-y sprite) scanline collision-triggered?))
+
+      ;; If the program tried to do more than 8 sprites, then the VDP must keep track of that.
+      (when (> (count matching-sprites) 8)
+        (swap! vdp-atom assoc :sprite-overflow? true)))
+
+    ;; Update the VDP flag if draw-single-sprite-line! indicated there was a sprite collision.
+    (when @collision-triggered?
+      (swap! vdp-atom assoc :sprite-collision? true))))
