@@ -56,7 +56,7 @@
             (swap! joypad-p1 #(bit-and % (bit-not bit-p1))))
           ;; Player 2
           (when-let [bit-p2 (get p2-key-map user-input)]
-            (if (or (= user-input :up) (= user-input :down))
+            (if (or (= user-input \i) (= user-input \k))
               (swap! joypad-p1 #(bit-and % (bit-not bit-p2)))
               (swap! joypad-p2 #(bit-and % (bit-not bit-p2))))))))))
 
@@ -68,6 +68,6 @@
         (swap! joypad-p1 #(bit-or % bit-p1)))
       ;; Player 2 (special case for up/down)
       (when-let [bit-p2 (get p2-key-map user-input)]
-        (if (or (= user-input :up) (= user-input :down))
+        (if (or (= user-input \i) (= user-input \k))
           (swap! joypad-p1 #(bit-or % bit-p2))
           (swap! joypad-p2 #(bit-or % bit-p2)))))))
