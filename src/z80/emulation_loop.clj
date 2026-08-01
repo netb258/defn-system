@@ -69,18 +69,17 @@
         ;; 2. RUN LINE RENDERING FUNCTIONS
         ;; Only render within the standard 224-line limit.
         (when (< scanline 224)
-          (let [current-vdp @vdp
-                vdp-regs    ^ints (:regs current-vdp)
+          (let [vdp-regs    ^ints (:regs @vdp)
                 ;; Bit 3 of VDP Register 1 controls standard 192-line mode vs extended 224-line mode
                 reg1        (int (if (and vdp-regs (>= (alength vdp-regs) 2)) (aget vdp-regs 1) 0))
                 mode-224?   (not= 0 (bit-and reg1 0x08))
                 active-limit (if mode-224? 224 192)]
             ;; ALWAYS draw the background line. This ensures that when the system is in 192-line mode,
             ;; lines 192 to 223 automatically drop into the overscan loop to draw a clean uniform border.
-            (display/draw-background-line! current-vdp frame-canvas scanline)
+            (display/draw-background-line! @vdp frame-canvas scanline)
             ;; ONLY compute foreground sprites and run collision grid checks during active video display lines
             (when (< scanline active-limit)
-              (display/draw-all-sprites-line-for-scanline! frame-canvas current-vdp scanline mode-224?))))
+              (display/draw-all-sprites-line-for-scanline! frame-canvas vdp scanline mode-224?))))
 
         ;; 3. HANDLE H-BLANK
         ;; The VDP line counter decrements on every active scanline.
