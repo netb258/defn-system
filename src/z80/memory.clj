@@ -1,4 +1,5 @@
 (ns z80.memory
+  (:require [clojure.java.io :as io])
   (:import [com.codingrodent.microprocessor IMemory]))
 
 ;; --- SEGA MASTER SYSTEM MEMORY LAYOUT ---
@@ -41,6 +42,10 @@
         safe-bank (mod bank-data total-banks)
         real-offset (+ (* safe-bank 16384) address)]
     (signed->unsigned (aget read-only-memory real-offset))))
+
+;; --------------------------------------------------------------------------------------------------
+;; -------------------------------------- ROM Loading Functions -------------------------------------
+;; --------------------------------------------------------------------------------------------------
 
 ;;NOTE: We need this function, because some ROM dumpers add a header.
 (defn- detect-rom-header-offset
@@ -93,6 +98,54 @@
   (.resetTStates cpu)
   (.setProgramCounter cpu rom-cart-start)) 
 
+;; --------------------------------------------------------------------------------------------------
+;; -------------------------------------- Battery Save Functions ------------------------------------
+;; --------------------------------------------------------------------------------------------------
+
+;; 0xFFFC Control Register state (default 0). Tracks if SRAM is enabled.
+(def ^:private sram-control (atom 0))
+
+(defn- md5-hash [^bytes rom-bytes]
+  (let [md (java.security.MessageDigest/getInstance "MD5")]
+    (.update md rom-bytes)
+    (format "%032x" (java.math.BigInteger. 1 (.digest md)))))
+
+;; NOTE: We are using delay, because we want to wait for the @rom to be loaded by load-rom-into-memory!
+(def ^:private sram-file-path (delay (str (md5-hash @rom) ".sav")))
+
+;; Standard SMS Cartridge RAM is usually 8KB or 16KB. We allocate 16KB.
+(def ^{:tag 'bytes :private true} cart-sram 
+  (delay
+    (let [file (io/file @sram-file-path)]
+      (if (.exists file)
+        (with-open [xin (io/input-stream file)]
+          (let [buf (byte-array 16384)]
+            (.read xin buf)
+            buf))
+        (byte-array 16384)))))
+
+(defn- save-sram-to-disk!
+  "Flushes the current in-memory Cartridge SRAM to a local file."
+  []
+  (with-open [xout (io/output-stream @sram-file-path)]
+    (.write xout ^bytes @cart-sram)))
+
+(defn- sram-enabled? 
+  "Returns true if the SRAM enable bit (Bit 3) is set in the 0xFFFC register."
+  []
+  (not= 0 (bit-and @sram-control 0x08)))
+
+(defn- get-sram-offset
+  "Calculates the offset in SRAM based on Address and Bank Select bit (Bit 2)."
+  ^long [^long address]
+  (let [bank (if (not= 0 (bit-and @sram-control 0x04)) 8192 0)
+        sram-relative-addr (mod (- address 0x8000) 8192)]
+    (+ bank sram-relative-addr)))
+
+;; --------------------------------------------------------------------------------------------------
+;; -------------------------------------- Memory Bus constructor  -----------------------------------
+;; --------------------------------------------------------------------------------------------------
+
 ;; NOTE: It is worth noting: games that don't use the standard Sega mapper
 ;; will never write to the mapper registers (0xFFFD, 0xFFFE, 0xFFFF).
 ;; This means that for those games, the mapper banks will allways stay as:
@@ -123,8 +176,11 @@
             (read-byte-from-mapper-slot :slot0 address active-rom))
           ;; --- SLOT 1 (0x4000 - 0x7FFF) ---
           (< address 0x8000) (read-byte-from-mapper-slot :slot1 (- address 0x4000) active-rom)
-          ;; --- SLOT 2 (0x8000 - 0xBFFF) ---
-          (< address ram-start) (read-byte-from-mapper-slot :slot2 (- address 0x8000) active-rom)
+          ;; --- SLOT 2 / SRAM SPACE (0x8000 - 0xBFFF) ---
+          (< address ram-start)
+          (if (sram-enabled?)
+            (signed->unsigned (aget @cart-sram (get-sram-offset address)))
+            (read-byte-from-mapper-slot :slot2 (- address 0x8000) active-rom))
           ;; --- WORK RAM (0xC000 - 0xDFFF) ---
           (< address mram-start) (signed->unsigned (aget sms-ram (- address ram-start)))
           ;; --- RAM MIRROR (0xE000 - 0xFFFF) ---
@@ -132,7 +188,12 @@
 
     (^void writeByte [this ^int address ^int value]
       (cond
-        ;; ROM Space is read-only
+        ;; Write to Slot 2 SRAM (if enabled by the game)
+        (and (>= address 0x8000) (< address ram-start) (sram-enabled?))
+        (do
+          (aset-byte @cart-sram (get-sram-offset address) (unchecked-byte value))
+          (save-sram-to-disk!)) ;; Save to file instantly on write
+        ;; ROM Space is otherwise read-only
         (< address ram-start) nil 
         ;; Write to main Work RAM
         (< address mram-start) (aset-byte sms-ram (- address ram-start) (unchecked-byte value))
@@ -146,6 +207,7 @@
           ;; The Sega Master System, uses Memory-Mapped I/O for its cartridge banking,
           ;; so it's the job of the Memory Bus to do this, not the IO Bus.
           (cond
+            (= address 0xFFFC) (reset! sram-control value)
             (= address 0xFFFD) (swap! mapper-banks assoc :slot0 value)
             (= address 0xFFFE) (swap! mapper-banks assoc :slot1 value)
             (= address 0xFFFF) (swap! mapper-banks assoc :slot2 value))))
