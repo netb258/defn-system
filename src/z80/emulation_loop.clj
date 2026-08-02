@@ -147,6 +147,14 @@
   []
   (.textureSampling (q/current-graphics) 2))
 
+(defn draw-scanlines! [screen-width screen-height opacity]
+  (q/stroke 0 0 0 opacity) ; Black lines with custom transparency (0-255)
+  (q/stroke-weight 1)      ; 1 pixel thick lines
+  (loop [y 0]
+    (when (< y screen-height)
+      (q/line 0 y screen-width y)
+      (recur (+ y 5)))))    ; Skip every 5th line to create the gaps
+
 ;; This function will call the instruction loop 50 times a second:
 (defn make-draw-function [^com.codingrodent.microprocessor.Z80.Z80Core cpu ^z80.vdp.VdpState vdp]
   (fn []
@@ -154,5 +162,7 @@
     (do-instruction-loop! cpu vdp)
     ;; 2. Force Nearest Neighbor sampling. I want the image blocky.
     (set-nearest-neighbor!)
+    ;; Decited against visible scanlines.
+    ;; (draw-scanlines! display/screen-width display/screen-height 40)
     ;; 3. Paint the fully constructed frame directly from the buffer
     (q/image @global-frame-buffer 0 0 display/screen-width display/screen-height)))
