@@ -34,6 +34,8 @@
   (let [vdp-regs ^ints (:regs vdp)]
     (if (> (alength vdp-regs) 10) (aget vdp-regs 10) 0)))
 
+;; NOTE: The method executeOneInstruction has a line like this: instruction = memory.readByte(reg_PC).
+;; Since the program counter starts out at 0x0000, we should be starting out by reading a single byte form the ROM.
 (defn- do-instruction-loop!
   "Executes a single PAL frame scanline-by-scanline (313 lines total).
   Runs the CPU instructions and draws the graphics."
