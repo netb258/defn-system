@@ -7,7 +7,9 @@ Uses a slightly modified version of the Z80Core found in this project: https://g
 
 # Controls
 Z is mapped to Button 1.
+
 X is mapped to Button 2.
+
 Use the arrow keys for movement.
 
 # Running the code
