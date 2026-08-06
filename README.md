@@ -5,6 +5,11 @@ Runs commercial games. Supports battery saves.
 
 Uses a slightly modified version of the Z80Core found in this project: https://github.com/codesqueak/Z80Processor
 
+# Controls
+Z is mapped to Button 1.
+X is mapped to Button 2.
+Use the arrow keys for movement.
+
 # Running the code
 lein run PATH_TO_ROM
 
