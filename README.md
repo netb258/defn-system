@@ -10,7 +10,7 @@ Z is mapped to Button 1.
 
 X is mapped to Button 2.
 
-Use the arrow keys for movement.
+Use the arrow keys for movement and ENTER to pause.
 
 # Running the code
 lein run PATH_TO_ROM
