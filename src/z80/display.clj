@@ -25,50 +25,61 @@
 ;; This is how the static background is handled. The actual moving sprites are a different story.
 
 (defrecord BackgroundData
-  [^int naming-table-start  ;; VRAM starting address for the Tile Map (Name Table)
-   ^int base-scroll-x       ;; Hardware horizontal scroll offset (Register 8)
-   ^int base-scroll-y       ;; Hardware vertical scroll offset (Register 9)
-   ^int max-rows            ;; Max rows in the tile map (28 for 192-line mode, 32 for 224-line mode)
-   ^int visible-height      ;; Vertical resolution in pixels (192 or 224)
-   ^int overscan-color      ;; Border/Overscan color value fetched from the palette cache
-   ^boolean h-scroll-lock?  ;; Disables horizontal scrolling for rows 0-15 (Register 0, Bit 6 - for game HUDs)
-   ^boolean v-scroll-lock?  ;; Disables vertical scrolling for columns 24-31 (Register 0, Bit 7 - for game HUDs)
-   ^boolean hide-left-8?])  ;; Blanks out the leftmost 8 pixels using the overscan color (Register 0, Bit 5)
+  [^int naming-table-start ;; VRAM starting address for the Tile Map (Name Table)
+   ^int base-scroll-x      ;; Hardware horizontal scroll offset (Register 8)
+   ^int base-scroll-y      ;; Hardware vertical scroll offset (Register 9)
+   ^int max-rows           ;; Max rows in the tile map (28 for 192-line mode, 32 for 224-line mode)
+   ^int visible-height     ;; Vertical resolution in pixels (192 or 224)
+   ^int overscan-color     ;; Border/Overscan color value fetched from the palette cache
+   ^boolean h-scroll-lock? ;; Disables horizontal scrolling for rows 0-15 (Register 0, Bit 6 - for game HUDs)
+   ^boolean v-scroll-lock? ;; Disables vertical scrolling for columns 24-31 (Register 0, Bit 7 - for game HUDs)
+   ^boolean hide-left-8?]) ;; Blanks out the leftmost 8 pixels using the overscan color (Register 0, Bit 5)
 
 (defn- parse-background-data
   "Parses VDP registers and packs them into a single BackgroundData record."
   [^ints vdp-regs ^ints color-palette-cache]
   ;; --- Register 1: Video Mode Control ---
-  (let [reg1 (int (if (and vdp-regs (>= (alength vdp-regs) 2)) (aget vdp-regs 1) 0))
+  (let [reg1 (int (aget vdp-regs 1))
         ;; Bit 3 of Register 1 determines if the display is in the extended 224-line mode
-        mode-224? (not= 0 (bit-and reg1 0x08))
+        mode-224? (not= 0 (bit-and reg1 2r00001000))
         visible-height (int (if mode-224? 224 192))
         max-rows (int (if mode-224? 32 28))
         ;; --- Register 2: Name Table Base Address ---
-        reg2 (int (if (and vdp-regs (>= (alength vdp-regs) 3)) (aget vdp-regs 2) 0x0E))
-        ;; Bits 1-3 determine the base VRAM address, shifted left by 10 (multiplied by 0x400 bytes)
-        naming-table-start (int (bit-shift-left (bit-and reg2 0x0E) 10))
+        reg2 (int (aget vdp-regs 2))
+        ;; Bits 1-3 determine the base VRAM address and it gets multiplied by 1024 bytes (1KB).
+        ;; This means that there are only 8 location where the naming table might start (3 bits represent up to dec 8).
+        naming-table-start (int (* (bit-and reg2 2r00001110) 1024))
         ;; --- Register 0: Mode Control 1 ---
-        reg0 (int (if (and vdp-regs (>= (alength vdp-regs) 1)) (aget vdp-regs 0) 0))
-        h-scroll-lock? (not= 0 (bit-and reg0 0x40)) ; Bit 6: Locks horizontal scrolling for top 2 rows
-        v-scroll-lock? (not= 0 (bit-and reg0 0x80)) ; Bit 7: Locks vertical scrolling for rightmost 8 columns
-        hide-left-8?   (not= 0 (bit-and reg0 0x20)) ; Bit 5: Masks column 0 to hide scrolling artifacts
+        reg0 (int (aget vdp-regs 0))
+        h-scroll-lock? (not= 0 (bit-and reg0 2r01000000)) ;; Bit 6: Locks horizontal scrolling for top 2 rows
+        v-scroll-lock? (not= 0 (bit-and reg0 2r10000000)) ;; Bit 7: Locks vertical scrolling for rightmost 8 columns
+        hide-left-8?   (not= 0 (bit-and reg0 2r00100000)) ;; Bit 5: Masks column 0 to hide scrolling artifacts
         ;; --- Registers 8 & 9: Scrolling Offsets ---
-        base-scroll-x (int (if (and vdp-regs (>= (alength vdp-regs) 9)) (memory/signed->unsigned (aget vdp-regs 8)) 0))
-        raw-scroll-y (int (if (and vdp-regs (>= (alength vdp-regs) 10)) (memory/signed->unsigned (aget vdp-regs 9)) 0))
+        base-scroll-x (int (memory/signed->unsigned (aget vdp-regs 8)))
+        raw-scroll-y (int (memory/signed->unsigned (aget vdp-regs 9)))
         ;; In 192-line mode, if Y scroll >= 224, it wraps around through 32 pixels instead of 256
         base-scroll-y (int (if mode-224? raw-scroll-y (if (>= raw-scroll-y 224) (mod raw-scroll-y 32) raw-scroll-y)))
         ;; --- Register 7: Border / Overscan Color ---
-        reg7 (int (if (and vdp-regs (>= (alength vdp-regs) 8)) (aget vdp-regs 7) 0))
-        border-palette-idx (bit-and reg7 0x0F) ; Lower 4 bits index the border color
+        reg7 (int (aget vdp-regs 7))
+        border-palette-idx (bit-and reg7 2r00001111) ;; Lower 4 bits index the border color
         ;; SMS background palette entries always reside in the second 16-color slot (offset 16+)
         overscan-color (int (aget color-palette-cache (+ border-palette-idx 16)))]
-    (->BackgroundData naming-table-start base-scroll-x base-scroll-y max-rows visible-height 
-                    overscan-color h-scroll-lock? v-scroll-lock? hide-left-8?)))
+    (->BackgroundData
+       naming-table-start
+       base-scroll-x
+       base-scroll-y
+       max-rows
+       visible-height 
+       overscan-color
+       h-scroll-lock?
+       v-scroll-lock?
+       hide-left-8?)))
 
 (defn- draw-single-background-line-pixel!
-  "Renders a single pixel for a scanline, factoring in horizontal/vertical locks, flips.
-   Returns a high-performance closure meant to be run repeatedly across individual horizontal loops."
+  "Renders a single pixel for a scanline, factoring in horizontal/vertical locks, flips and more.
+  Returns a high-performance closure meant to be run repeatedly across individual horizontal loops.
+  Basically the whole thing is one big let form that does a lot of digging/calculating with the VDP's memory
+  and sets a single pixel at the end."
   [cfg ^bytes vram-bytes ^ints color-palette-cache ^ints img-pixels]
   ;; Extract layout configurations once to avoid map property lookups inside the hot inner pixel loop
   (let [naming-table-start (int (:naming-table-start cfg))
@@ -76,74 +87,71 @@
         base-scroll-y      (int (:base-scroll-y cfg))
         max-rows           (int (:max-rows cfg))
         overscan-color     (int (:overscan-color cfg))
-        hide-left-8?       (boolean (:hide-left-8? cfg))
-        vram-len           (int (alength vram-bytes))]
+        hide-left-8?       (boolean (:hide-left-8? cfg))]
     (fn [^long pixel-x ^long pixel-y col-v-locked? row-h-locked?]
-      ;; 1. VERTICAL AXIS LOOKUPS
-      ;; If vertical scroll locking is active (for column entries >= 24), bypass VDP scroll offsets.
-      (let [actual-bg-y      (int (if col-v-locked? pixel-y (+ pixel-y base-scroll-y)))
+            ;; 1. VERTICAL AXIS LOOKUPS
+            ;; If vertical scroll locking is active (for column entries >= 24), bypass VDP scroll offsets.
+      (let [scrolled-y       (int (if col-v-locked? pixel-y (+ pixel-y base-scroll-y)))
             ;; Find which tile row (0-27 or 0-31 depending on mode-224) contains the targeted pixel y-coordinate
-            map-tile-y       (int (mod (quot actual-bg-y 8) max-rows))
+            tile-row         (int (mod (quot scrolled-y 8) max-rows))
             ;; Calculate the exact fine-Y offset (0 to 7) inside that 8x8 graphic matrix cell
-            tile-fine-y-act  (int (mod actual-bg-y 8))
+            ;; NOTE: The pixel position within an 8x8 tile is typically called the FINE offset. We'll stick to that naming.
+            fine-y           (int (mod scrolled-y 8))
             ;; The VDP Name Table is exactly 32 tiles wide (holds data for 32 horizontal tile columns per tile row)
-            table-row-offset (int (* map-tile-y 32))
-            
+            table-row-offset (int (* tile-row 32))
+
             ;; 2. HORIZONTAL AXIS LOOKUPS
             ;; If horizontal scroll locking is active (for tile rows 0 and 1), bypass VDP scroll offsets.
-            bg-x             (int (if row-h-locked? pixel-x (memory/signed->unsigned (- pixel-x base-scroll-x))))
+            scrolled-x      (int (if row-h-locked? pixel-x (memory/signed->unsigned (- pixel-x base-scroll-x))))
             ;; Find which tile column (0-31) contains the targeted pixel x-coordinate
-            map-tile-x       (int (quot bg-x 8))
+            tile-col        (int (quot scrolled-x 8))
             ;; Calculate the exact fine-X offset (0 to 7) inside that 8x8 graphic matrix cell
-            tile-fine-x-act  (int (mod bg-x 8))
-            
+            fine-x          (int (mod scrolled-x 8))
+
             ;; 3. READ NAME TABLE ENTRY FROM VRAM
             ;; Every background coordinate is represented by a 2-byte descriptor (16 bits)
-            table-idx        (int (+ table-row-offset map-tile-x))
-            addr-offset      (int (+ naming-table-start (* table-idx 2)))]
-        
-        (if (< addr-offset vram-len)
-          (let [low-byte        (int (memory/signed->unsigned (aget vram-bytes addr-offset)))
-                high-byte       (int (memory/signed->unsigned (aget vram-bytes (unchecked-inc addr-offset))))
-                ;; Bit 0 of High-Byte paired with Low-Byte creates the 9-bit pattern tile index (0 to 511)
-                tile-index      (int (bit-or low-byte (bit-shift-left (bit-and high-byte 0x01) 8)))
-                
-                ;; 4. PARSE TILE DESCRIPTOR RENDERING FLAGS
-                h-flip?         (not= 0 (bit-and high-byte 0x02))       ;; Bit 1: Flip tile pixels horizontally
-                v-flip?         (not= 0 (bit-and high-byte 0x04))       ;; Bit 2: Flip tile pixels vertically
-                use-palette-1?  (not= 0 (bit-and high-byte 0x08))       ;; Bit 3: Palette select (0 = Palette 0, 1 = Palette 1)
-                palette-offset  (if use-palette-1? 16 0)                ;; System background colors reside in palette entries 16-31
-                
-                ;; Map fine coordinates depending on active flip vectors
-                target-y        (int (if v-flip? (- 7 tile-fine-y-act) tile-fine-y-act))
-                target-x        (int (if h-flip? (- 7 tile-fine-x-act) tile-fine-x-act))
-                
-                ;; Extract the 4-bit pixel color using the SMS planar unpacking routine (SMS patterns are stored in a 4bpp format)
-                local-color-idx (int (color/get-sms-pixel-color-idx vram-bytes tile-index target-y target-x))
-                color-idx       (+ local-color-idx palette-offset)
-                pixel-color     (int (aget color-palette-cache color-idx))
-                
-                ;; 5. ENCODE METADATA FOR SPRITE LAYER PRIORITY
-                ;; Extract Background Priority Flag (Bit 4 of Name Table High-Byte)
-                bg-priority?    (not= 0 (bit-and high-byte 0x10))
-                
-                ;; - Bit 24: Store Priority State (0 = No priority, 1 = Priority active)
-                ;; - Bits 25-28: Store local 4-bit palette color index (0 to 15, to determine background transparency)
-                encoded-pixel   (bit-or (bit-and pixel-color 0x00FFFFFF) 
-                                        (if bg-priority? 0x01000000 0x00000000)
-                                        (bit-shift-left local-color-idx 25))
-                
-                ;; Compute linear destination index for the 256-wide SMS frame buffer
-                dest-idx        (int (+ (* pixel-y 256) pixel-x))]
-            
-            ;; 6. WRITE PIXEL TO THE FRAME BUFFER
-            ;; If Register 0 Bit 5 is checked, Column 0 (leftmost 8 pixels) blanks out to hide scrolling artifacts.
-            (if (and hide-left-8? (< pixel-x 8))
-              (aset img-pixels dest-idx overscan-color)
-              (aset img-pixels dest-idx encoded-pixel)))
-          
-          ;; VRAM Safeguard: fall back to painting the official overscan color into the 256-wide buffer
-          (aset img-pixels (int (+ (* pixel-y 256) pixel-x)) overscan-color))))))
+            ;; NOTE: An entry in the naming table is typically called an NTE (naming table entry). We'll stick to that.
+            nte-idx         (int (+ table-row-offset tile-col))
+            nte-offset      (int (+ naming-table-start (* nte-idx 2)))
+
+            low-byte        (int (memory/signed->unsigned (aget vram-bytes nte-offset)))
+            high-byte       (int (memory/signed->unsigned (aget vram-bytes (unchecked-inc nte-offset))))
+            ;; Bit 0 of High-Byte paired with Low-Byte creates the 9-bit pattern tile index (0 to 511)
+            tile-index      (int (bit-or low-byte (bit-shift-left (bit-and high-byte 2r00000001) 8)))
+
+            ;; 4. PARSE TILE DESCRIPTOR RENDERING FLAGS
+            h-flip?         (not= 0 (bit-and high-byte 2r00000010)) ;; Bit 1: Flip tile pixels horizontally
+            v-flip?         (not= 0 (bit-and high-byte 2r00000100)) ;; Bit 2: Flip tile pixels vertically
+            use-palette-1?  (not= 0 (bit-and high-byte 2r00001000)) ;; Bit 3: Palette select (0 = Palette 0, 1 = Palette 1)
+            palette-offset  (if use-palette-1? 16 0)                ;; System background colors reside in palette entries 16-31
+
+            ;; Map fine coordinates depending on active flip vectors
+            render-y        (int (if v-flip? (- 7 fine-y) fine-y))
+            render-x        (int (if h-flip? (- 7 fine-x) fine-x))
+
+            ;; Extract the 4-bit pixel color using the SMS planar unpacking routine (SMS patterns are stored in a 4bpp format)
+            tile-color-idx  (int (color/get-sms-pixel-color-idx vram-bytes tile-index render-y render-x))
+            cram-idx        (+ tile-color-idx palette-offset)
+            pixel-color     (int (aget color-palette-cache cram-idx))
+
+            ;; 5. ENCODE METADATA FOR SPRITE LAYER PRIORITY
+            ;; Extract Background Priority Flag (Bit 4 of Name Table High-Byte)
+            bg-priority?    (not= 0 (bit-and high-byte 2r00010000))
+
+            ;; - Bit 24: Store Priority State (0 = No priority, 1 = Priority active)
+            ;; - Bits 25-28: Store local 4-bit palette color index (0 to 15, to determine background transparency)
+            final-pixel   (bit-or (bit-and pixel-color 0x00FFFFFF) 
+                                    (if bg-priority? 0x01000000 0x00000000)
+                                    (bit-shift-left tile-color-idx 25))
+
+            ;; Compute linear destination index for the 256-wide SMS frame buffer
+            frame-buffer-idx (int (+ (* pixel-y 256) pixel-x))]
+
+        ;; 6. WRITE PIXEL TO THE FRAME BUFFER
+        ;; If Register 0 Bit 5 is checked, Column 0 (leftmost 8 pixels) blanks out to hide scrolling artifacts.
+        (if (and hide-left-8? (< pixel-x 8))
+          (aset img-pixels frame-buffer-idx overscan-color)
+          (aset img-pixels frame-buffer-idx final-pixel))))))
 
 (defn draw-background-line!
   "Renders only the background pixels for the current active scanline into the Quil image buffer."
@@ -158,16 +166,16 @@
         overscan-color (int (:overscan-color cfg))
         h-scroll-lock? (boolean (:h-scroll-lock? cfg))
         v-scroll-lock? (boolean (:v-scroll-lock? cfg))
-        
+
         ;; Open the pixel array for direct, fast primitive writes.
         img-pixels ^ints (.pixels ^processing.core.PImage background-image)
         draw-pixel! (draw-single-background-line-pixel! cfg vram-bytes color-palette-cache img-pixels)
-        
+
         pixel-y (int scanline)
         tile-y-int (int (quot pixel-y 8))
         ;; SMS feature: If bit 6 of Reg 0 is set, horizontal scrolling is locked for rows 0 and 1 (game Scoreboard/HUD)
         row-h-locked? (and h-scroll-lock? (< tile-y-int 2))]
-    
+
     ;; Check if the current line falls within the currently active VDP video height (192 vs 224 mode)
     (if (< pixel-y visible-height)
       ;; LOOP 1: Line falls inside active resolution limits. Loop through all 32 hardware tile columns.
@@ -179,7 +187,7 @@
           (dotimes [fx 8]
             (let [pixel-x (int (+ (* tile-x-int 8) fx))]
               (draw-pixel! pixel-x pixel-y col-v-locked? row-h-locked?)))))
-      
+
       ;; LOOP 2: Handle offscreen color writing (e.g., lines 193-224 when running in 192-line mode)
       ;; Blanks out the remainder of the 224-tall texture canvas with the official overscan/border color
       (let [dest-row-offset (int (* pixel-y 256))]
@@ -187,7 +195,6 @@
           ;; Use standard aset for fast unboxed array modification
           (aset img-pixels (int (+ dest-row-offset pixel-x)) overscan-color))))
     background-image))
-
 
 ;; --------------------------------------------------------------------------------------------------
 ;; --------------------------------------- Sprite Display Code --------------------------------------
