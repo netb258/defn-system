@@ -3,6 +3,9 @@
             [z80.color :as color]))
 
 ;; This module basically diggs through the VRAM and VDP registers and displays the information inside them on the screen.
+;; More info on the SMS VRAM layout can be found here:
+;; https://www.smspower.org/Development/VRAMMemoryMap
+
 ;; Notice that this module does not include Quil. The reason is that all image processing is done on primitive arrays of bytes.
 ;; This way the performance is superior.
 
@@ -22,6 +25,7 @@
 ;; Also, this is why the base resolution is 256x224.
 ;; Width: 32 columns × 8 pixels = 256 pixels
 ;; Height: 28 rows × 8 pixels = 224 pixels
+;; For more info on the Naming Table (also called a Tile Map): https://www.smspower.org/Development/Tilemap
 ;; This is how the static background is handled. The actual moving sprites are a different story.
 
 (defrecord BackgroundData
@@ -134,7 +138,7 @@
             cram-idx        (+ tile-color-idx palette-offset)
             pixel-color     (int (aget color-palette-cache cram-idx))
 
-            ;; 5. ENCODE METADATA FOR SPRITE LAYER PRIORITY
+            ;; 5. ADD METADATA FOR SPRITE LAYER PRIORITY
             ;; Extract Background Priority Flag (Bit 4 of Name Table High-Byte)
             bg-priority?    (not= 0 (bit-and high-byte 2r00010000))
 
@@ -171,28 +175,28 @@
         img-pixels ^ints (.pixels ^processing.core.PImage background-image)
         draw-pixel! (draw-single-background-line-pixel! cfg vram-bytes color-palette-cache img-pixels)
 
+        ;; Remember we are drawing a line here so the y coordinates (the row index) stays static (we loop across x).
         pixel-y (int scanline)
-        tile-y-int (int (quot pixel-y 8))
+        tile-y (int (quot pixel-y 8))
         ;; SMS feature: If bit 6 of Reg 0 is set, horizontal scrolling is locked for rows 0 and 1 (game Scoreboard/HUD)
-        row-h-locked? (and h-scroll-lock? (< tile-y-int 2))]
+        row-h-locked? (and h-scroll-lock? (< tile-y 2))]
 
     ;; Check if the current line falls within the currently active VDP video height (192 vs 224 mode)
     (if (< pixel-y visible-height)
-      ;; LOOP 1: Line falls inside active resolution limits. Loop through all 32 hardware tile columns.
-      (dotimes [screen-tile-x 32]
-        (let [tile-x-int (int screen-tile-x)
-              ;; SMS feature: If bit 7 of Reg 0 is set, vertical scrolling is locked for columns 24 to 31 (Side HUD)
-              col-v-locked? (and v-scroll-lock? (>= tile-x-int 24))]
-          ;; Loop across the 8 horizontal fine pixels belonging to this column block
-          (dotimes [fx 8]
-            (let [pixel-x (int (+ (* tile-x-int 8) fx))]
+      ;; LOOP 1: Render the 32 tile columns for this scanline.
+      (dotimes [tile-x 32]
+        (let [;; SMS feature: If bit 7 of Reg 0 is set, vertical scrolling is locked for columns 24 to 31 (Side HUD)
+              col-v-locked? (and v-scroll-lock? (>= tile-x 24))]
+          ;; Loop across the 8 horizontal fine pixels belonging to this tile column (each tile consists of 8x8 pixels).
+          ;; NOTE: The pixel position within an 8x8 tile is typically called the FINE offset. We'll stick to that naming.
+          (dotimes [fine-x 8]
+            (let [pixel-x (int (+ (* tile-x 8) fine-x))]
               (draw-pixel! pixel-x pixel-y col-v-locked? row-h-locked?)))))
 
       ;; LOOP 2: Handle offscreen color writing (e.g., lines 193-224 when running in 192-line mode)
       ;; Blanks out the remainder of the 224-tall texture canvas with the official overscan/border color
       (let [dest-row-offset (int (* pixel-y 256))]
         (dotimes [pixel-x 256]
-          ;; Use standard aset for fast unboxed array modification
           (aset img-pixels (int (+ dest-row-offset pixel-x)) overscan-color))))
     background-image))
 
@@ -211,6 +215,13 @@
 ;; Byte 1: The horizontal X coordinate.
 ;; Byte 2: The Tile Index number (which 8x8 graphic to pull from VRAM
 
+;; NOTE on "Pattern Generator" 
+;; Instead of storing full images, old consoles store a library of 8x8 shapes. This works like a mosaic puzzle.
+;; The "Pattern Generator" is the region of VRAM where the actual raw, physical pixel graphics (the patterns/tiles) are stored.
+;; The SAT is the blueprint that puts the puzzle together.
+
+;; More info on the SAT can be found here: https://www.smspower.org/Development/Sprites
+
 (defn- sprite-size-16? 
   "Checks Bit 1 of VDP Register 1 to see if sprites are 8x16.
    Returns:
@@ -218,9 +229,9 @@
    - false : Sprites are 8x8 pixels."
   [^z80.vdp.VdpState vdp-state]
   (let [vdp-regs ^ints (:regs vdp-state)
-        reg1 (if (> (alength vdp-regs) 1) (aget vdp-regs 1) 0)]
-    ;; Relies on the global atom @active-vdp. Extracts Bit 1 from Register 1.
-    (not= 0 (bit-and reg1 0x02))))
+        reg1 (aget vdp-regs 1)]
+    ;; Extracts Bit 1 from Register 1.
+    (not= 0 (bit-and reg1 2r00000010))))
 
 (defn- get-sprite-tile-base
   "Checks Bit 2 of VDP Register 6 to determine if sprites start at 
@@ -230,39 +241,46 @@
    - 0   : Sprites start at Tile index 0 (VRAM 0x0000)."
   [^z80.vdp.VdpState vdp-state]
   (let [vdp-regs ^ints (:regs vdp-state)
-        reg6 (if (and vdp-regs (>= (alength vdp-regs) 7)) (aget vdp-regs 6) 0)]
+        reg6 (aget vdp-regs 6)]
     ;; Bit 2 of Register 6 controls the base tile set offset (0 or 256)
-    (if (not= 0 (bit-and reg6 0x04))
+    (if (not= 0 (bit-and reg6 2r00000100))
       256
       0)))
 
 (defrecord SpriteData
-  [^int visible-height       ;; Active vertical resolution (192 or 224 pixels)
-   ^int sat-base-addr        ;; VRAM starting address for the Sprite Attribute Table (Y-coordinate list)
-   ^int sat-info-table       ;; VRAM starting address for the X-coordinate and Tile index pairing table
-   ^int sprite-tile-base     ;; Pattern generator base index modifier (0 or 256)
-   ^boolean large-sprites?   ;; Sprite size configuration flag (true = 8x16, false = 8x8)
-   ^bytes vram-bytes         ;; Direct reference to the raw VRAM byte array
-   ^ints color-palette-cache  ;; Cached system palette colors mapped from CRAM
-   ^ints img-pixels])        ;; Linear destination pixel array belonging to the Quil image
+  [^int visible-height       ;; Active screen height (192, 224, or 240)
+   ^int sat-base-addr        ;; VRAM address of Sprite Attribute Table (Y-coords)
+   ^int sat-info-table       ;; VRAM address of Sprite Info Table (X-coords/Tiles)
+   ^int sprite-tile-base     ;; Base index modifier for pattern generator (0 or 256)
+   ^boolean large-sprites?   ;; Sprite size mode (false = 8x8, true = 8x16)
+   ^bytes vram-bytes         ;; VRAM array reference
+   ^ints color-palette-cache ;; System color palette cache
+   ^ints img-pixels])        ;; Framebuffer - pixel destination array
 
 (defn- parse-sprite-data
   "Parses VDP settings and bundles them with memory arrays into a single fast context object."
   [vdp vdp-regs ^bytes vram-bytes ^ints color-palette-cache ^ints img-pixels]
   (let [;; Extract video display mode and height from Register 1, Bit 3
-        reg1 (int (if (and vdp-regs (>= (alength ^ints vdp-regs) 2)) (aget ^ints vdp-regs 1) 0))
-        mode-224? (not= 0 (bit-and reg1 0x08))
-        visible-height (int (if mode-224? 224 192))
+        reg1             (int (aget ^ints vdp-regs 1))
+        mode-224?        (not= 0 (bit-and reg1 2r00001000))
+        visible-height   (int (if mode-224? 224 192))
         ;; The Sprite Attribute Table (SAT) base is derived from Register 5.
         ;; Shifting (reg5 AND 0x7E) left by 7 bytes points to the Y-coordinate array.
-        reg5 (if (and vdp-regs (>= (alength ^ints vdp-regs) 6)) (aget ^ints vdp-regs 5) 0x7E)
-        sat-base-addr (int (bit-shift-left (bit-and (int reg5) 0x7E) 7))
+        reg5             (aget ^ints vdp-regs 5)
+        sat-base-addr    (int (bit-shift-left (bit-and (int reg5) 2r01111110) 7))
         ;; The X-coordinate and Tile data starts exactly 128 bytes (0x80) past the SAT base.
-        sat-info-table (int (+ sat-base-addr 0x80))
-        large-sprites? (boolean (sprite-size-16? vdp))
+        sat-info-table   (int (+ sat-base-addr 0x80))
+        large-sprites?   (boolean (sprite-size-16? vdp))
         sprite-tile-base (int (get-sprite-tile-base vdp))]
-    (SpriteData. visible-height sat-base-addr sat-info-table sprite-tile-base 
-                          large-sprites? vram-bytes color-palette-cache img-pixels)))
+    (SpriteData.
+      visible-height
+      sat-base-addr
+      sat-info-table
+      sprite-tile-base 
+      large-sprites?
+      vram-bytes
+      color-palette-cache
+      img-pixels)))
 
 ;; NOTE: The sprite drawing functions will also perform VDP collision detection.
 (defn- draw-single-sprite-line!
