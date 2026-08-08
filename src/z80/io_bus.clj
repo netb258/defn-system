@@ -39,7 +39,7 @@
             ;; NOTE: The v-counter is basically the current scan-line
             ;; The h-counter is the current pixel within that scan-line.
             (vdp/get-v-counter @active-vdp) ;; Even ports ($40-$7E) = V-Counter
-            (vdp/calculate-h-counter))      ;; Odd ports ($41-$7F)  = H-Counter
+            (vdp/calculate-h-counter @cpu)) ;; Odd ports ($41-$7F)  = H-Counter
 
           ;; --- Group 0x80 to 0xBF ---
           (= port-group 0x80)
