@@ -156,8 +156,12 @@
         ;; Mode 0: VRAM Read
         (= code-type 0)
         (let [^bytes vram-arr (.vram vdp)
-              buffered-val (if (< new-loc (count vram-arr)) (memory/signed->unsigned (aget vram-arr new-loc)) 0)]
-          (assoc vdp :vram-pointer (inc new-loc) :operation code-type :read-buffer buffered-val :first-byte? true))
+              vram-val (memory/signed->unsigned (aget vram-arr new-loc))]
+          (assoc vdp
+                 :vram-pointer (inc new-loc)
+                 :operation code-type
+                 :read-buffer vram-val
+                 :first-byte? true))
 
         ;; Mode 1: VRAM Write
         (= code-type 1) (assoc vdp :vram-pointer new-loc :operation code-type :first-byte? true)
@@ -186,9 +190,9 @@
 
 (defn read-status-port! [^VdpState vdp ^Z80Core cpu]
   ;; Check if V-Blank is actively triggered and also check for sprite collisions and overflows.
-  (let [vblank-bit    (if (:vblank-active? vdp) 0x80 0x00)
-        overflow-bit  (if (:sprite-overflow? vdp) 0x40 0x00)
-        collision-bit (if (:sprite-collision? vdp) 0x20 0x00)
+  (let [vblank-bit    (if (:vblank-active? vdp)    2r10000000 0x00)
+        overflow-bit  (if (:sprite-overflow? vdp)  2r01000000 0x00)
+        collision-bit (if (:sprite-collision? vdp) 2r00100000 0x00)
         ;; When the CPU reads the VDP status port it must receive this combined status byte.
         current-status (bit-or vblank-bit overflow-bit collision-bit)]
     ;; Reading this port clears the CPU interrupt line.
