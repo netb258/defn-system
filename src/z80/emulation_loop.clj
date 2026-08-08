@@ -14,19 +14,21 @@
 
 (defn- vblank-irq-enabled?
   "Checks the VDP's internal Register 1 state to see if the Sega Master System 
-   hardware has enabled V-Blank Frame Interrupt requests."
+  hardware has enabled V-Blank Frame Interrupt requests."
   [^z80.vdp.VdpState vdp]
   (let [vdp-regs ^ints (:regs vdp)
         reg1 (if (> (alength vdp-regs) 1) (aget vdp-regs 1) 0)]
     ;; Bit 5 of VDP Register 1 enables the Frame Interrupt (V-Blank IRQ)
-    (not= 0 (bit-and reg1 0x20))))
+    ;; Remember the bits are counted from right to left starting at bit 0.
+    (not= 0 (bit-and reg1 2r00100000))))
 
 (defn- hblank-irq-enabled?
-  "Checks Bit 4 of VDP Register 0 to see if Line Interrupts (H-Blank IRQs) are enabled."
+  "Checks Bit 4 of VDP Register 0 to see if Line Interrupts (H-Blank IRQs) are enabled.
+  The bits are counted from right to left starting at bit 0."
   [^z80.vdp.VdpState vdp]
   (let [vdp-regs ^ints (:regs vdp)
         reg0 (if (> (alength vdp-regs) 0) (aget vdp-regs 0) 0)]
-    (not= 0 (bit-and reg0 0x10))))
+    (not= 0 (bit-and reg0 2r00010000))))
 
 (defn- get-vdp-reg10
   "Retrieves the value of VDP Register 10 (Scanline target)."
@@ -74,7 +76,7 @@
           (let [vdp-regs    ^ints (:regs @vdp)
                 ;; Bit 3 of VDP Register 1 controls standard 192-line mode vs extended 224-line mode
                 reg1        (int (if (and vdp-regs (>= (alength vdp-regs) 2)) (aget vdp-regs 1) 0))
-                mode-224?   (not= 0 (bit-and reg1 0x08))
+                mode-224?   (not= 0 (bit-and reg1 2r00001000))
                 active-limit (if mode-224? 224 192)]
             ;; ALWAYS draw the background line. This ensures that when the system is in 192-line mode,
             ;; lines 192 to 223 automatically drop into the overscan loop to draw a clean uniform border.
