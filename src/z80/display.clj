@@ -6,6 +6,8 @@
 ;; More info on the SMS VRAM layout can be found here:
 ;; https://www.smspower.org/Development/VRAMMemoryMap
 
+;; More info on the VPD Registers can be found here: https://www.smspower.org/Development/VDPRegisters
+
 ;; Notice that this module does not include Quil. The reason is that all image processing is done on primitive arrays of bytes.
 ;; This way the performance is superior.
 
