@@ -84,7 +84,7 @@
   Returns a high-performance closure meant to be run repeatedly across individual horizontal loops.
   Basically the whole thing is one big let form that does a lot of digging/calculating with the VDP's memory
   and sets a single pixel at the end."
-  [cfg ^bytes vram-bytes ^ints color-palette-cache ^ints img-pixels]
+  [^BackgroundData cfg ^bytes vram-bytes ^ints color-palette-cache ^ints img-pixels]
   ;; Extract layout configurations once to avoid map property lookups inside the hot inner pixel loop
   (let [naming-table-start (int (:naming-table-start cfg))
         base-scroll-x      (int (:base-scroll-x cfg))
@@ -121,7 +121,9 @@
             low-byte        (int (memory/signed->unsigned (aget vram-bytes nte-offset)))
             high-byte       (int (memory/signed->unsigned (aget vram-bytes (unchecked-inc nte-offset))))
             ;; Bit 0 of High-Byte paired with Low-Byte creates the 9-bit pattern tile index (0 to 511)
-            tile-index      (int (bit-or low-byte (bit-shift-left (bit-and high-byte 2r00000001) 8)))
+            ;; The SMS can hold a total of 512 tiles (sprite and background tiles included).
+            ;; With this index, the tiles are very easy to locate, as they start at VRAM address 0.
+            vram-tile-index      (int (bit-or low-byte (bit-shift-left (bit-and high-byte 2r00000001) 8)))
 
             ;; 4. PARSE TILE DESCRIPTOR RENDERING FLAGS
             h-flip?         (not= 0 (bit-and high-byte 2r00000010)) ;; Bit 1: Flip tile pixels horizontally
@@ -134,7 +136,7 @@
             render-x        (int (if h-flip? (- 7 fine-x) fine-x))
 
             ;; Extract the 4-bit pixel color using the SMS planar unpacking routine (SMS patterns are stored in a 4bpp format)
-            tile-color-idx  (int (color/get-sms-pixel-color-idx vram-bytes tile-index render-y render-x))
+            tile-color-idx  (int (color/get-sms-pixel-color-idx vram-bytes vram-tile-index render-y render-x))
             cram-idx        (+ tile-color-idx palette-offset)
             pixel-color     (int (aget color-palette-cache cram-idx))
 
@@ -165,7 +167,7 @@
         vdp-regs    ^ints (:regs vdp)
         ;; Pull the system palette configuration out of CRAM (Color RAM holding system colors)
         color-palette-cache ^ints (color/get-vdp-color-palette cram-ints)
-        cfg (parse-background-data vdp-regs color-palette-cache)
+        cfg ^BackgroundData (parse-background-data vdp-regs color-palette-cache)
         visible-height (int (:visible-height cfg))
         overscan-color (int (:overscan-color cfg))
         h-scroll-lock? (boolean (:h-scroll-lock? cfg))
@@ -195,9 +197,9 @@
 
       ;; LOOP 2: Handle offscreen color writing (e.g., lines 193-224 when running in 192-line mode)
       ;; Blanks out the remainder of the 224-tall texture canvas with the official overscan/border color
-      (let [dest-row-offset (int (* pixel-y 256))]
+      (let [render-row-offset (int (* pixel-y 256))]
         (dotimes [pixel-x 256]
-          (aset img-pixels (int (+ dest-row-offset pixel-x)) overscan-color))))
+          (aset img-pixels (int (+ render-row-offset pixel-x)) overscan-color))))
     background-image))
 
 ;; --------------------------------------------------------------------------------------------------
@@ -268,8 +270,8 @@
         ;; Shifting (reg5 AND 0x7E) left by 7 bytes points to the Y-coordinate array.
         reg5             (aget ^ints vdp-regs 5)
         sat-base-addr    (int (bit-shift-left (bit-and (int reg5) 2r01111110) 7))
-        ;; The X-coordinate and Tile data starts exactly 128 bytes (0x80) past the SAT base.
-        sat-info-table   (int (+ sat-base-addr 0x80))
+        ;; The X-coordinate and Tile data starts exactly 128 bytes past the SAT base.
+        sat-info-table   (int (+ sat-base-addr 128))
         large-sprites?   (boolean (sprite-size-16? vdp))
         sprite-tile-base (int (get-sprite-tile-base vdp))]
     (SpriteData.
@@ -299,38 +301,45 @@
 
    NOTE, that we never clear the background layer bit to 0.
    It will be reset to 0 naturally when a new frame is drawn with a fresh background."
-  [^SpriteData ctx pixel-x raw-tile-index fine-y current-screen-y collision-atom]
+  [^SpriteData ctx pixel-x raw-tile-index tile-row current-screen-y collision-atom]
   ;; Extract context fields directly from the primitive record to avoid reflection or map lookups
-  (let [sx                  (int pixel-x)
-        sprite-tile-base    (int (.-sprite-tile-base ctx))
+  (let [sprite-tile-base    (int (.-sprite-tile-base ctx))
         large-sprites?      (boolean (.-large-sprites? ctx))
         vram-bytes          ^bytes (.-vram-bytes ctx)
         color-palette-cache ^ints (.-color-palette-cache ctx)
         img-pixels          ^ints (.-img-pixels ctx)
-        
+
         ;; 1. 8x16 SPRITE TILE INDEX CALCULATIONS
-        tile-offset        (int (quot fine-y 8))
-        actual-tile-index  (int (if large-sprites? 
+        tile-row-offset    (int (quot tile-row 8))
+        sized-tile-index   (int (if large-sprites? 
                                   ;; SMS Hardware Rule: Force bit 0 to 0 for 8x16 sprites
-                                  (+ (bit-and (int (memory/signed->unsigned raw-tile-index)) 0xFE) tile-offset) 
+                                  (+ (bit-and (int (memory/signed->unsigned raw-tile-index)) 0xFE) tile-row-offset) 
                                   raw-tile-index))
-        final-sprite-tile  (int (+ actual-tile-index sprite-tile-base))
-        tile-fine-y        (int (mod fine-y 8))
-        dest-row-offset    (int (* current-screen-y 256))]
+        ;; The absolute, finalized index of the 8-byte graphics pattern (tile) inside VRAM. It will be a number between 0 and 511.
+        ;; The SMS can hold a total of 512 tiles (sprite and background tiles included).
+        ;; With this index, the tiles are very easy to locate, as they start at VRAM address 0.
+        vram-tile-index    (int (+ sized-tile-index sprite-tile-base))
+        ;; NOTE: The pixel position within an 8x8 tile is typically called the FINE offset. We'll stick to that naming.
+        ;; Remember we are drawing a line here so the y coordinates (the row index) stays static (we loop across x).
+        tile-fine-y        (int (mod tile-row 8))
+        render-row         (int (* current-screen-y 256))]
 
     ;; 2. HORIZONTAL PIXEL LOOP
-    (dotimes [x 8]
-      (let [color-idx (int (color/get-sms-pixel-color-idx vram-bytes final-sprite-tile tile-fine-y (int x)))]
+    (dotimes [tile-fine-x 8]
+      (let [color-idx (int (color/get-sms-pixel-color-idx vram-bytes vram-tile-index tile-fine-y (int tile-fine-x)))]
         ;; Hardware Rule: Sprite color index 0 is always transparent and does not paint or cause collisions.
         (when (> color-idx 0)
-          (let [current-screen-x (int (+ sx (int x)))]
+          (let [current-screen-x (int (+ pixel-x (int tile-fine-x)))]
             ;; Boundary protection against offscreen horizontal coordinates (viewport clipping)
             (when (and (>= current-screen-x 0) (< current-screen-x 256))
-              (let [dest-idx (int (+ dest-row-offset current-screen-x))
-                    
+              ;; All we really need for drawing are render-idx and pixel-color. The rest just do extra features like collision checking.
+              (let [render-idx (int (+ render-row current-screen-x))
+                    ;; SMS sprites map exclusively to the second 16-color block of the system palette
+                    sprite-color-idx (int (+ color-idx 16))
+                    pixel-color      (int (aget color-palette-cache sprite-color-idx))
                     ;; 3. DECODE BACKGROUND LAYER METADATA AND CHECK FOR COLLISION
                     ;; Wrap read values in unchecked-int to bypass safe integer conversion traps.
-                    bg-pixel-raw     (unchecked-int (aget img-pixels dest-idx))
+                    bg-pixel-raw     (unchecked-int (aget img-pixels render-idx))
 
                     ;; HARDWARE COLLISION CHECK: If Bit 29 is already set, another sprite's pixel is here!
                     _ (when (not= 0 (bit-and bg-pixel-raw 0x20000000))
@@ -340,7 +349,7 @@
                     marked-bg-pixel (unchecked-int (bit-or bg-pixel-raw 0x20000000))
 
                     ;; Extract 4-bit color index stored at bits 25-28 of the background pixel
-                    bg-color-idx     (int (bit-and (bit-shift-right bg-pixel-raw 25) 0x0F))
+                    bg-color-idx     (int (bit-and (bit-shift-right bg-pixel-raw 25) 2r00001111))
                     ;; Extract 1-bit background priority flag stored at bit 24
                     bg-has-priority? (not= 0 (bit-and bg-pixel-raw 0x01000000))
 
@@ -349,17 +358,14 @@
                                          (= bg-color-idx 0))]
 
                 (if should-draw?
-                  (let [;; SMS sprites map exclusively to the second 16-color block of the system palette
-                        sprite-color-idx (int (+ color-idx 16))
-                        pixel-color      (int (aget color-palette-cache sprite-color-idx))]
-                    ;; Commit pixel to frame buffer array:
-                    ;; - Keep bits 24-31 unchanged (retains background AND our newly set sprite collision metadata)
-                    ;; - Overwrite bits 0-23 with the new 24-bit sprite RGB values
-                    (aset img-pixels dest-idx (bit-or (bit-and marked-bg-pixel 0xFF000000) 
-                                                      (bit-and pixel-color 0x00FFFFFF))))
+                  ;; Commit pixel to frame buffer array:
+                  ;; - Keep bits 24-31 unchanged (retains background AND our newly set sprite collision metadata)
+                  ;; - Overwrite bits 0-23 with the new 24-bit sprite RGB values
+                  (aset img-pixels render-idx (bit-or (bit-and marked-bg-pixel 0xFF000000) 
+                                                      (bit-and pixel-color 0x00FFFFFF)))
                   ;; Even if hidden by background priority, write back the marked metadata 
                   ;; because overlapping hidden sprites STILL trigger collisions!
-                  (aset img-pixels dest-idx marked-bg-pixel))))))))))
+                  (aset img-pixels render-idx marked-bg-pixel))))))))))
 
 (defn draw-all-sprites-line-for-scanline!
   "Takes a Quil image with the current background drawn on it.
@@ -372,40 +378,38 @@
         vdp-regs            ^ints  (:regs @vdp-atom)
         color-palette-cache ^ints  (color/get-vdp-color-palette cram-ints)
         img-pixels          ^ints  (.pixels ^processing.core.PImage background-image)
-        vram-len            (int (alength vram-bytes))
         ;; Parse and gather VDP constraints into a single record
-        ^SpriteData ctx     (parse-sprite-data @vdp-atom vdp-regs vram-bytes color-palette-cache img-pixels)
+        ctx                 ^SpriteData (parse-sprite-data @vdp-atom vdp-regs vram-bytes color-palette-cache img-pixels)
         sat-base-addr       (int (.-sat-base-addr ctx))
-        sat-info-table      (int (.-sat-info-table ctx))
+        sat-attr-table      (int (.-sat-info-table ctx))
         sprite-height       (int (if (.-large-sprites? ctx) 16 8))
-        ;; Local mutable accumulator thread context to collect line intersections safely
         collision-triggered? (atom false)]
 
     ;; Loop through all 64 possible sprite descriptors stored inside the Sprite Attribute Table (SAT)
     ;; 1. First, find which sprites actually hit this scanline (up to the 8-sprite limit)
     ;; They will be returned as a verctor of maps.
     (let [reg0 (aget vdp-regs 0) ;; Read Register 0 to check for the Early Clock (EC) Sprite Shift flag (Bit 3)
-          early-clock-shift? (not= 0 (bit-and reg0 0x08))
+          shift-sprites-left-8px? (not= 0 (bit-and reg0 2r00001000))
           matching-sprites
-          (loop [sprite-id (int 0) acc []]
+          (loop [sprite-id 0 acc []]
             (if (and (< sprite-id 64)) ; Stop at 64 sprites
               (let [y-addr (int (+ sat-base-addr sprite-id))
-                    raw-y  (int (if (< y-addr vram-len) (memory/signed->unsigned (aget vram-bytes y-addr)) 0))]
-                (if (and (not mode-224?) (= raw-y 0xD0)) acc ;; A vertical coordinate entry of 0xD0 signals the VDP to drop subsequent sprite calculations.
-                  (let [sprite-y (int (inc raw-y))
-                        fine-y   (int (- scanline sprite-y))]
+                    y-byte (int (memory/signed->unsigned (aget vram-bytes y-addr)))]
+                (if (and (not mode-224?) (= y-byte 0xD0)) acc ;; A vertical coordinate entry of 0xD0 signals the VDP to drop subsequent sprite calculations.
+                  (let [sprite-y   (int (inc y-byte))
+                        sprite-row (int (- scanline sprite-y))]
                     ;; VERTICAL SCANLINE INTERSECTION CHECK
-                    (if (and (>= fine-y 0) (< fine-y sprite-height))
+                    (if (and (>= sprite-row 0) (< sprite-row sprite-height))
                       ;; Sprite intersects with scanline. Gather its data and continue.
-                      (let [info-idx       (int (* sprite-id 2))
-                            x-addr         (int (+ sat-info-table info-idx))
+                      (let [attr-idx       (int (* sprite-id 2))
+                            x-addr         (int (+ sat-attr-table attr-idx))
                             tile-addr      (int (inc x-addr))
-                            sprite-x       (int (if (< x-addr vram-len) (memory/signed->unsigned (aget vram-bytes x-addr)) 0))
-                            raw-tile-index (int (if (< tile-addr vram-len) (memory/signed->unsigned (aget vram-bytes tile-addr)) 0))
+                            sprite-x       (int (memory/signed->unsigned (aget vram-bytes x-addr)))
+                            raw-tile-index (int (memory/signed->unsigned (aget vram-bytes tile-addr)))
                             ;; Shift left by 8 pixels only when the VDP Early Clock (Register 0, Bit 3) is active.
-                            base-x-offset  (int (if early-clock-shift? -8 0))
+                            base-x-offset  (int (if shift-sprites-left-8px? -8 0))
                             corrected-x    (+ sprite-x base-x-offset)]
-                        (recur (inc sprite-id) (conj acc {:x corrected-x :tile raw-tile-index :fine-y fine-y})))
+                        (recur (inc sprite-id) (conj acc {:x corrected-x :tile raw-tile-index :sprite-row sprite-row})))
                       ;; Didn't intersect, just check the next sprite
                       (recur (inc sprite-id) acc)))))
               acc))]
@@ -413,7 +417,7 @@
       ;; 2. DRAW BACKWARD: Iterate from the end of our list back to index 0
       ;; This guarantees Sprite 0 details overwrite higher indices on the canvas!
       (doseq [sprite (reverse (take 8 matching-sprites))]
-        (draw-single-sprite-line! ctx (:x sprite) (:tile sprite) (:fine-y sprite) scanline collision-triggered?))
+        (draw-single-sprite-line! ctx (:x sprite) (:tile sprite) (:sprite-row sprite) scanline collision-triggered?))
 
       ;; If the program tried to do more than 8 sprites, then the VDP must keep track of that.
       (when (> (count matching-sprites) 8)
