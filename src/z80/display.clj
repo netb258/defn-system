@@ -301,7 +301,7 @@
 
    NOTE, that we never clear the background layer bit to 0.
    It will be reset to 0 naturally when a new frame is drawn with a fresh background."
-  [^SpriteData ctx pixel-x raw-tile-index tile-row current-screen-y collision-atom]
+  [^SpriteData ctx pixel-x raw-tile-index tile-row scanline collision-atom]
   ;; Extract context fields directly from the primitive record to avoid reflection or map lookups
   (let [sprite-tile-base    (int (.-sprite-tile-base ctx))
         large-sprites?      (boolean (.-large-sprites? ctx))
@@ -322,7 +322,7 @@
         ;; NOTE: The pixel position within an 8x8 tile is typically called the FINE offset. We'll stick to that naming.
         ;; Remember we are drawing a line here so the y coordinates (the row index) stays static (we loop across x).
         tile-fine-y        (int (mod tile-row 8))
-        render-row         (int (* current-screen-y 256))]
+        render-row         (int (* scanline 256))]
 
     ;; 2. HORIZONTAL PIXEL LOOP
     (dotimes [tile-fine-x 8]
