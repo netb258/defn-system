@@ -5,6 +5,8 @@
   (:import [com.codingrodent.microprocessor IMemory IBaseDevice]
            [com.codingrodent.microprocessor.Z80 Z80Core]))
 
+;; NOTE: A complete IO Port Map can be found here: https://www.smspower.org/Development/IOPortMap
+
 (defn- do-vdp-io-read!
   "This function is programmed to be as generic as possible.
    However, in practice it calls either vdp/read-status-port! or vdp/data-read! (the two VDP io reading functions).
