@@ -54,8 +54,8 @@
           ;; --- Group 0xC0 to 0xFF ---
           (= port-group 0xC0)
           (if (even? port)
-            (joypads/read-joypad1) ;; Even ports ($DC) = P1 Input
-            (bit-or (joypads/read-joypad2) 0x80)) ;; Odd ports ($DD)  = P2 Input + Export (non Japan) Bit (Bit 7 = 1)
+            (joypads/read-joypad1)  ;; Even ports ($DC) = P1 Input
+            (joypads/read-joypad2)) ;; Odd ports ($DD)  = P2 Input
 
           :else 0xFF)))
 
