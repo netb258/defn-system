@@ -16,6 +16,10 @@
   sprite-collision?
   vblank-active?])
 
+;; NOTE on VDP Registers - Notice that our VDP record below contains an array of 16 registers (:regs (int-array 16)).
+;; Other modules will frequently look up these registers. This is a full description of the data they hold:
+;; https://www.smspower.org/Development/VDPRegisters
+
 (defn create-vdp []
   (map->VdpState {
     :vram (byte-array 16384) ;; 16KB of VRAM. Used for pretty much all graphics in an SMS game.
