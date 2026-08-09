@@ -2,6 +2,8 @@
   (:require [clojure.java.io :as io])
   (:import [com.codingrodent.microprocessor IMemory]))
 
+;; NOTE: A complete Memory Map can be found here: https://www.smspower.org/Development/MemoryMap
+
 ;; --- SEGA MASTER SYSTEM MEMORY LAYOUT ---
 ;; The SMS has 64KB of total address space:
 ;; 0x0000 - 0xBFFF : ROM Cartridge space (48KB)
