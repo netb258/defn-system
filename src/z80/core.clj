@@ -9,6 +9,9 @@
   (:import [com.codingrodent.microprocessor.Z80 Z80Core])
   (:gen-class))
 
+;; NOTE: A wonderful overview of the Sega Master System and all of it's components can be found here:
+;; https://www.smspower.org/uploads/Development/JavaGear-Report.pdf
+
 ;; The io-bus will need to communicate with the CPU, even though we have not composed it yet.
 ;; We can't compose the CPU yet, because we must pass it both a memory-bus and an io-bus.
 (defonce cpu (atom nil))
