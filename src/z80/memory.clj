@@ -151,12 +151,12 @@
 (defn- sram-enabled? 
   "Returns true if the SRAM enable bit (Bit 3) is set in the 0xFFFC register."
   []
-  (not= 0 (bit-and @sram-control 0x08)))
+  (not= 0 (bit-and @sram-control 2r00001000)))
 
 (defn- get-sram-offset
   "Calculates the offset in SRAM based on Address and Bank Select bit (Bit 2)."
   ^long [^long address]
-  (let [bank (if (not= 0 (bit-and @sram-control 0x04)) 8192 0)
+  (let [bank (if (not= 0 (bit-and @sram-control 2r00000100)) 8192 0)
         sram-relative-addr (mod (- address 0x8000) 8192)]
     (+ bank sram-relative-addr)))
 
