@@ -296,6 +296,10 @@
    clipping, and priority evaluations against pre-rendered background.
    
    Tracks hardware sprite-on-sprite pixel collisions using Bit 29 (0x20000000) in the current background layer.
+   NOTE that bit 29 is perfectly safe to use. Quil keeps the frame buffer as an array of ints (32 bits per int).
+   Out of these 32 bits, only 24 bits are the visible RGB values.
+   These last 4 bits 31, 30, 29 and 28 are the alpha channel, which we are not using for anything.
+
    For every horizontal pixel in the sprite (8 in total)
    we are setting a single unused bit in the background layer (matching the same coordinates) to 1.
    When the function gets called again, to draw another sprite line,
@@ -344,6 +348,7 @@
                     bg-pixel-raw     (unchecked-int (aget img-pixels render-idx))
 
                     ;; HARDWARE COLLISION CHECK: If Bit 29 is already set, another sprite's pixel is here!
+                    ;; Remember: Quil keeps the image as an int array (32 bits per int). But only 24 bits are used for visible RGB.
                     _ (when (not= 0 (bit-and bg-pixel-raw 0x20000000))
                         (reset! collision-atom true))
 
