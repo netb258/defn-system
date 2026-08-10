@@ -24,7 +24,7 @@
 
 (defn make-io-bus [^Z80Core cpu ^z80.vdp.VdpState active-vdp]
   (reify IBaseDevice
-    (IORead [this address]
+    (^int IORead [this ^int address]
       (let [port (memory/signed->unsigned address)
             ;; Decode ports by their upper 2 bits (4 main blocks)
             port-group (bit-and port 0xC0)] 
@@ -59,7 +59,7 @@
 
           :else 0xFF)))
 
-    (IOWrite [this address data]
+    (^void IOWrite [this ^int address ^int data]
       (let [port (memory/signed->unsigned address)
             port-group (bit-and port 0xC0)]
         (cond
