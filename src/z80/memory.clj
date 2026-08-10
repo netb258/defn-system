@@ -17,16 +17,32 @@
 (def ^:private mram-start     0xE000)
 (def ^:private mram-end       0xFFFF)
 
-;; (def ^{:tag 'bytes} rom (byte-array 49152))    ;; 48KB max for a basic ROM with no mapper.
+;; (def ^{:tag 'bytes} rom (byte-array 49152)) ;; 48KB max for a basic ROM with no mapper.
 ;; Since we are now implementing the standard Sega Mapper our old static 48KB array needs to go.
 (def ^:private rom (atom (byte-array 0)))
+
 ;; The stardard Sega Mapper splits the ROM space into 16kb pieces/slots
 ;; and dynamically loads parts of large games into the ROM space.
 ;; Track the current active bank index for each of the three 16KB slots
 (def ^:private mapper-banks (atom {:slot0 0
                                    :slot1 1
                                    :slot2 2}))
+
 (def ^{:tag 'bytes :private true} sms-ram (byte-array 8192)) ;; 8KB of actual Work RAM
+
+;; NOTE: We're going to be using signed->unsigned a lot. Notice that the above ROM and RAM is defined as (byte-array).
+;; This creates a problem. The original hardware works with unsigned bytes (0 to 255).
+;; However, Java (and Clojure) work with signed bytes (-128 to 127) by default.
+
+;; Also, this memory (especially the RAM) will be read-from/written-to many times a second. This creates another hurdle.
+;; Even though all the memory is efficient byte arrays like this (byte-array 8192), we cannot simply write with (aset).
+;; The function aset is a generic function that uses object boxing and will be slow. We need to use (aset-byte) for speed.
+;; However, aset-byte only works with signed bytes. We are going to have to pass incoming bytes to (unchecked-byte).
+;; This way any input byte to (aset-byte) will be transformed into a signed byte.
+
+;; Basically our access to system memory will look like this:
+;; When the hardware tries to write an unsigned byte to our (byte-array), we convert it to signed with (unchecked-byte).
+;; When the hardware tries to read from our (byte-array), we convert the read byte to unsigned with (signed->unsigned)
 
 (defn signed->unsigned
   "Takes a signed byte (range -128 to 127) 
