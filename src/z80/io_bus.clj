@@ -68,6 +68,6 @@
           ;; When reading, it serves as the status port. When writing it is the control port.
           (= port-group 0x80)
           (if (even? port)
-            (swap! active-vdp vdp/data-write! (unchecked-byte data))
+            (swap! active-vdp vdp/data-write! (memory/unsigned->signed data))
             (swap! active-vdp vdp/control-write! data)))
         nil))))
