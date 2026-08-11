@@ -17,7 +17,7 @@
 (def ^:private mram-start     0xE000)
 (def ^:private mram-end       0xFFFF)
 
-;; (def ^{:tag 'bytes} rom (byte-array 49152)) ;; 48KB max for a basic ROM with no mapper.
+;; (def ^{:tag 'bytes} rom (byte-array 49152))    ;; 48KB max for a basic ROM with no mapper.
 ;; Since we are now implementing the standard Sega Mapper our old static 48KB array needs to go.
 (def ^:private rom (atom (byte-array 0)))
 
@@ -30,25 +30,32 @@
 
 (def ^{:tag 'bytes :private true} sms-ram (byte-array 8192)) ;; 8KB of actual Work RAM
 
-;; NOTE: We're going to be using signed->unsigned a lot. Notice that the above ROM and RAM is defined as (byte-array).
+
+;; NOTE: We're going to be using these two functions a lot. Notice that the above ROM and RAM is defined as (byte-array).
 ;; This creates a problem. The original hardware works with unsigned bytes (0 to 255).
 ;; However, Java (and Clojure) work with signed bytes (-128 to 127) by default.
 
 ;; Also, this memory (especially the RAM) will be read-from/written-to many times a second. This creates another hurdle.
 ;; Even though all the memory is efficient byte arrays like this (byte-array 8192), we cannot simply write with (aset).
 ;; The function aset is a generic function that uses object boxing and will be slow. We need to use (aset-byte) for speed.
-;; However, aset-byte only works with signed bytes. We are going to have to pass incoming bytes to (unchecked-byte).
+;; However, aset-byte only works with signed bytes. We are going to have to pass incoming bytes to (unsigned->signed).
 ;; This way any input byte to (aset-byte) will be transformed into a signed byte.
 
 ;; Basically our access to system memory will look like this:
-;; When the hardware tries to write an unsigned byte to our (byte-array), we convert it to signed with (unchecked-byte).
+;; When the hardware tries to write an unsigned byte to our (byte-array), we convert it to signed with (unsigned->signed).
 ;; When the hardware tries to read from our (byte-array), we convert the read byte to unsigned with (signed->unsigned)
 
 (defn signed->unsigned
   "Takes a signed byte (range -128 to 127) 
   and converts it to an unsigned byte (range 0 to 255)."
-  ^long [^long signed-byte]
+  [^long signed-byte]
   (bit-and signed-byte 0xFF))
+
+(defn unsigned->signed
+  "Takes an unsigned byte (range 0 to 255) 
+  and converts it to a signed byte (range -128 to 127)."
+  [^long unsigned-byte]
+  (unchecked-byte unsigned-byte))
 
 (defn- read-byte-from-mapper-slot
   "Returns an unsigned byte from a provided mapper slot and address."
@@ -209,17 +216,17 @@
         ;; Write to Slot 2 SRAM (if enabled by the game)
         (and (>= address 0x8000) (< address ram-start) (sram-enabled?))
         (do
-          (aset-byte @cart-sram (get-sram-offset address) (unchecked-byte value))
+          (aset-byte @cart-sram (get-sram-offset address) (unsigned->signed value))
           (save-sram-to-disk!)) ;; Save to file instantly on write
         ;; ROM Space is otherwise read-only
         (< address ram-start) nil 
         ;; Write to main Work RAM
-        (< address mram-start) (aset-byte sms-ram (- address ram-start) (unchecked-byte value))
+        (< address mram-start) (aset-byte sms-ram (- address ram-start) (unsigned->signed value))
         ;; Write to Mirror RAM area & Mapper Registers
         :else
         (do
           ;; Mirror the write down into the actual 8KB Work RAM
-          (aset-byte sms-ram (- address mram-start) (unchecked-byte value))
+          (aset-byte sms-ram (- address mram-start) (unsigned->signed value))
           ;; Intercept writes targeting the Mapper Registers (0xFFFD - 0xFFFF)
           ;; and fill our Clojure atom with the data.
           ;; The Sega Master System, uses Memory-Mapped I/O for its cartridge banking,
