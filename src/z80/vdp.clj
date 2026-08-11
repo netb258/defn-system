@@ -88,7 +88,7 @@
       (or (= op 0) (= op 1) (= op 2))
       (let [address (take-14-bits loc)
             ^bytes vram (.vram vdp)]
-        (aset vram address (unchecked-byte value)))
+        (aset vram address (memory/unsigned->signed value)))
 
       ;; CRAM (Palette) Write
       (= op 3)
