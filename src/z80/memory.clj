@@ -74,8 +74,11 @@
 
 ;;NOTE: We need this function, because some ROM dumpers add a header.
 (defn- detect-rom-header-offset
-  "Scans raw ROM bytes for the magic 'TMR SEGA' string at standard hardware 
-   offsets to determine if an extra 512-byte copier header is present."
+  "Scans raw ROM bytes for the magic 'TMR SEGA' string to determine
+   if an extra 512-byte copier header is present.
+   This function takes a ROM as a byte-array and returns either 0 or 512.
+   Returns 0 if the ROM is clean.
+   Returns 512 if the ROM has a dumper header that needs to be removed."
   [^bytes rom-bytes]
   (let [;; Standard SMS header locations
         standard-offsets [0x7FF0 0x3FF0 0x1FF0]
@@ -93,25 +96,24 @@
       :else 0)))
 
 (defn load-rom-into-memory!
-  "Calculates the correct data offset, allocates a perfectly sized
-   byte array for the cartridge, and loads the raw machine code."
+  "Takes a byte-array and loads it into the private @rom atom.
+   Any header from a ROM dumper is omitted."
   [^bytes source-bytes]
   (let [header-offset (detect-rom-header-offset source-bytes)
         actual-code-len (- (count source-bytes) header-offset)
         new-target-array (byte-array actual-code-len)]
-    
     (if (> header-offset 0)
       (println "Detected a 512-byte rom dumper header. Stripping offset...")
       (println "Detected raw/clean ROM structure."))
-    
     ;; Copy clean binary code into properly sized array
     (System/arraycopy source-bytes header-offset new-target-array 0 actual-code-len)
-    
     ;; Overwrite the global rom atom with this newly allocated array
     (reset! rom new-target-array)
     (println (format "Successfully loaded ROM into cartridge memory (%d KB)." (quot actual-code-len 1024)))))
 
-(defn reset-emulator [^com.codingrodent.microprocessor.Z80.Z80Core cpu]
+(defn reset-emulator
+  "Clears system RAM and resets the Z80Core cpu object."
+  [^com.codingrodent.microprocessor.Z80.Z80Core cpu]
   ;; Reset the Sega Mapper to its standard power-on baseline state
   (reset! mapper-banks {:slot0 0
                         :slot1 1
@@ -127,10 +129,12 @@
 ;; -------------------------------------- Battery Save Functions ------------------------------------
 ;; --------------------------------------------------------------------------------------------------
 
-;; 0xFFFC Control Register state (default 0). Tracks if SRAM is enabled.
+;; Port 0xFFFC - Control SRAM state (default 0). Tracks if SRAM is enabled.
 (def ^:private sram-control (atom 0))
 
-(defn- md5-hash [^bytes rom-bytes]
+(defn- md5-hash
+  "Takes a ROM as a byte-array and returns it's MD5 hash as a string."
+  [^bytes rom-bytes]
   (let [md (java.security.MessageDigest/getInstance "MD5")]
     (.update md rom-bytes)
     (format "%032x" (java.math.BigInteger. 1 (.digest md)))))
@@ -156,7 +160,7 @@
     (.write xout ^bytes @cart-sram)))
 
 (defn- sram-enabled? 
-  "Returns true if the SRAM enable bit (Bit 3) is set in the 0xFFFC register."
+  "Returns true if the SRAM enable bit (Bit 3) was set in port 0xFFFC."
   []
   (not= 0 (bit-and @sram-control 2r00001000)))
 
@@ -186,7 +190,10 @@
 ;; This means that our setup works with those games
 ;; that require the standard Sega mapper and those that do not.
 
-(defn make-memory-bus []
+(defn make-memory-bus
+  "Returns a complete Memory object that can be used by Z80Core to compose a CPU object.
+  The CPU object shuld be able to read-from/write-to the memory addresses defined here."
+  []
   (reify IMemory
     (^int readByte [this ^int address]
       (let [^bytes active-rom @rom]
