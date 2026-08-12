@@ -57,6 +57,14 @@
   [^long unsigned-byte]
   (unchecked-byte unsigned-byte))
 
+;; When the user inserts a cartridge into the console, the Z80 CPU can freely read from the cart's memory (ROM).
+;; However, the Z80 can only access 64K addresses.
+;; If the cart contains more memory than 64KB, then the Z80 cannot access any data beyond those 64K addresses.
+;; To overcome this limitation, SMS cartridges came with swappable memory banking.
+
+;; This flexible memory scheme was implemented by the standard Sega mapper chip, which was used in 99% of carts.
+;; The below function and the @mapper-banks atom, implement this simple and elegant memory scheme.
+
 (defn- read-byte-from-mapper-slot
   "Returns an unsigned byte from a provided mapper slot and address."
   ^long [slot ^long address ^bytes read-only-memory]
