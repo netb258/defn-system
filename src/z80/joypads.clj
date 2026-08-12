@@ -17,7 +17,12 @@
 ;; Port 0xDD (Data Port B): Covers the rest of Player 2 and the Reset button.
 ;; When the Z80 executes an IN A, ($DC) instruction, it expects a byte where 0 means pressed and 1 means unpressed (active low).
 
-(defn- get-key []
+(defn- get-key
+  "Reads a key press from the keyboard.
+  If the key is a normal one like the letter R, then it gets returned as a char \r.
+  If the key is one of the non-character keys it gets returned as a pre-defined constant.
+  For example if the UP arrow key is pressed, it gets returned as: KeyEvent/VK_UP."
+  []
   (let [raw-key (q/raw-key)
         the-key-code (q/key-code)
         the-key-pressed (if (= processing.core.PConstants/CODED (int raw-key)) the-key-code raw-key)]
@@ -57,7 +62,9 @@
   [all-buttons-byte button-byte]
   (bit-or all-buttons-byte button-byte))
 
-(defn make-key-press-handler [^com.codingrodent.microprocessor.Z80.Z80Core cpu]
+(defn make-key-press-handler
+  "Returns a keys-press function that Quil's defsketch understands."
+  [^com.codingrodent.microprocessor.Z80.Z80Core cpu]
   (fn []
     (let [user-input (get-key)]
       (if (= user-input \newline)
@@ -77,7 +84,9 @@
               (swap! joypad-p1 set-pressed bit-p2)
               (swap! joypad-p2 set-pressed bit-p2))))))))
 
-(defn make-key-release-handler []
+(defn make-key-release-handler
+  "Returns a keys-release function that Quil's defsketch understands."
+  []
   (fn []
     (let [user-input (get-key)]
       ;; Player 1
