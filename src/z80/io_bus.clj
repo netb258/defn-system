@@ -22,7 +22,10 @@
 ;; --- SEGA MASTER SYSTEM I/O BUS ---
 ;; SMS components like Video (VDP) and Joypads are hooked up to the ports here.
 
-(defn make-io-bus [^Z80Core cpu ^z80.vdp.VdpState active-vdp]
+(defn make-io-bus
+  "Returns a complete I/O device object that can be used by Z80Core to compose a CPU object.
+  The CPU object shuld be able to read-from/write-to the I/O addresses defined here."
+  [^Z80Core cpu ^z80.vdp.VdpState active-vdp]
   (reify IBaseDevice
     (^int IORead [this ^int address]
       (let [port (memory/signed->unsigned address)
