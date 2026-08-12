@@ -79,7 +79,10 @@
   [byte1 byte2]
   (bit-or byte2 (bit-shift-left byte1 8)))
 
-(defn data-write! [^VdpState vdp ^long value]
+(defn data-write!
+  "Writes 'value' to either the VDP's VRAM or CRAM.
+  After the performing the write, returns the next state that the VDP should transition to."
+  [^VdpState vdp ^long value]
   (let [op (int (.operation vdp))
         loc (int (.vram-pointer vdp))]
     (cond
@@ -97,18 +100,22 @@
         (aset cram cram-idx (int value))))
 
     (-> vdp
-        ;; Address pointer must wrap around at 14 bits (0x3FFF)
         (assoc :vram-pointer (take-14-bits (inc loc)))
         ;; FIX for FluBBa VDP test 9: Hardware writes to the data port explicitly overwrite the read buffer!
         (assoc :read-buffer value)
         (assoc :first-byte? true))))
 
-(defn data-read! [^VdpState vdp]
+(defn data-read!
+  "Reads a single byte from the VDP's VRAM.
+  The function returns a vector with two values inside it.
+  The first one is the byte that was read.
+  The second one is the new state that the VDP should transition to."
+  [^VdpState vdp]
   (let [loc (int (.vram-pointer vdp))
         address (take-14-bits loc)
         ^bytes vram-arr (.vram vdp)
         ;; 1. The CPU receives what was ALREADY sitting in the hardware buffer
-        return-val (memory/signed->unsigned (int (.read-buffer vdp)))
+        return-val (memory/signed->unsigned (.read-buffer vdp))
         ;; 2. Prefetch the NEXT byte from VRAM into the buffer for the next read
         next-buffered-val (memory/signed->unsigned (aget vram-arr address))
         ;; 3. Increment and wrap the VRAM address pointer
@@ -124,7 +131,14 @@
 ;; This is exactly what this function does.
 ;; It parses the two byte command and sets the VDP in the proper state to execute one of it's modes.
 
-(defn control-write! [^VdpState vdp ^long value]
+(defn control-write!
+  "Takes a byte 'value' and depending on what is inside the byte, the VDP will transition to a new state.
+  The function returns the new state that the VDP shuld transition to.
+
+  NOTE, that Mode 2: VDP Register Write is a special case. In Mode 2, both the register write will be performed
+  and also a new state for the VDP will be returned. The other modes do not actually perform their specified tasks.
+  Think of them as set-up phases."
+  [^VdpState vdp ^long value]
   (if (:first-byte? vdp)
     ;; First byte: Save and wait for the second byte
     ;; When a first-byte arrives, we need to construct a new vram-pointer
@@ -192,7 +206,12 @@
 ;; The other two statuses (Sprite Collision and Sprite Overflow) are rarely used by comparison, but they are included.
 ;; The Sprite collision flag does sound important, but in practice most games just use their own collision logic.
 
-(defn read-status-port! [^VdpState vdp ^Z80Core cpu]
+(defn read-status-port!
+  "Returns a VDP status byte and a new state for the VDP.
+  The function returns a vector with two values inside it.
+  The first one is the status byte.
+  The second one is the new state that the VDP should transition to."
+  [^VdpState vdp ^Z80Core cpu]
   ;; Check if V-Blank is actively triggered and also check for sprite collisions and overflows.
   (let [vblank-bit    (if (:vblank-active? vdp)    2r10000000 0x00)
         overflow-bit  (if (:sprite-overflow? vdp)  2r01000000 0x00)
