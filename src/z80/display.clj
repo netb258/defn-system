@@ -217,7 +217,8 @@
 ;; Y-Coordinate Table (64 bytes): The first 64 bytes of the SAT contain the vertical Y positions for sprites 0 to 63.
 ;; X & Tile Info Table (128 bytes): This section follows immediately after the Y table. Every sprite gets 2 bytes here:
 ;; Byte 1: The horizontal X coordinate.
-;; Byte 2: The Tile Index number (which 8x8 graphic to pull from VRAM
+;; Byte 2: The Tile Index number (which 8x8 graphic to pull from VRAM)
+;; Remember that the tiles start at VRAM address 0x00. So a simple index is very effective in fetching them.
 
 ;; NOTE on "Pattern Generator" 
 ;; Instead of storing full images, old consoles store a library of 8x8 shapes. This works like a mosaic puzzle.
@@ -262,7 +263,7 @@
    ^ints img-pixels])        ;; Framebuffer - pixel destination array
 
 (defn- parse-sprite-data
-  "Parses VDP settings and bundles them with memory arrays into a single fast context object."
+  "Parses VDP registers and packs them into a single SpriteData record."
   [vdp vdp-regs ^bytes vram-bytes ^ints color-palette-cache ^ints img-pixels]
   (let [;; Extract video display mode and height from Register 1, Bit 3
         reg1             (int (aget ^ints vdp-regs 1))
@@ -272,7 +273,7 @@
         ;; Shifting (reg5 AND 0x7E) left by 7 bytes points to the Y-coordinate array.
         reg5             (aget ^ints vdp-regs 5)
         sat-base-addr    (int (bit-shift-left (bit-and (int reg5) 2r01111110) 7))
-        ;; The X-coordinate and Tile data starts exactly 128 bytes past the SAT base.
+        ;; The X-coordinate and Tile indexes starts exactly 128 bytes past the SAT base.
         sat-info-table   (int (+ sat-base-addr 128))
         large-sprites?   (boolean (sprite-size-16? vdp))
         sprite-tile-base (int (get-sprite-tile-base vdp))]
