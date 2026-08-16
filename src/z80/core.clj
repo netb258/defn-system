@@ -12,12 +12,10 @@
 ;; NOTE: A wonderful overview of the Sega Master System and all of it's components can be found here:
 ;; https://www.smspower.org/uploads/Development/JavaGear-Report.pdf
 
-;; The io-bus will need to communicate with the CPU, even though we have not composed it yet.
-;; We can't compose the CPU yet, because we must pass it both a memory-bus and an io-bus.
 (defonce cpu (atom nil))
 
 (defn construct-cpu!
-  "This function will finally tie all components together.
+  "This function will tie all components together.
   It will construct a Z80Core CPU and pass it a Memory Bus that knows how to communicate between CPU/RAM/ROM.
   It will also pass it a proper IO-BUS that know how to communicate between CPU/VDP/JoyPads."
   [^z80.vdp.VdpState vdp]
