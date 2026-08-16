@@ -60,7 +60,7 @@
       (let [start-tstates (.getTStates cpu)
             target-tstates (+ start-tstates cycles-per-line)]
 
-        ;; Keep VDP state synchronized with the current hardware horizontal raster layer
+        ;; Keep VDP state synchronized with the current horizontal scan-line.
         (swap! vdp assoc :current-scan-line scanline)
 
         ;; 1. PROCESS Z80 CPU INSTRUCTIONS FOR THIS SCANLINE
