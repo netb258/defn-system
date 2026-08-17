@@ -30,15 +30,15 @@
     (^int IORead [this ^int address]
       (let [port (memory/signed->unsigned address)
             ;; Decode ports by their upper 2 bits (4 main blocks)
-            port-group (bit-and port 0xC0)] 
+            port-group (bit-and port 2r11000000)] 
         (cond
-          ;; --- Group 0x00 to 0x3F ---
+          ;; --- Group 0x00 to 0x3F --- (0x00 is 2r00000000)
           (= port-group 0x00)
           (if (even? port)
             0xFF ;; Port $00 is generally unmapped/read-only export status or open bus
             (vdp/get-v-counter @active-vdp)) ;; Odd ports ($01-$3F) return V-Counter!
 
-          ;; --- Group 0x40 to 0x7F ---
+          ;; --- Group 0x40 to 0x7F --- (0x40 is 2r01000000)
           (= port-group 0x40)
           (if (even? port)
             ;; NOTE: The v-counter is basically the current scan-line
@@ -46,7 +46,7 @@
             (vdp/get-v-counter @active-vdp) ;; Even ports ($40-$7E) = V-Counter
             (vdp/calculate-h-counter @cpu)) ;; Odd ports ($41-$7F)  = H-Counter
 
-          ;; --- Group 0x80 to 0xBF ---
+          ;; --- Group 0x80 to 0xBF --- (0x80 is 2r10000000)
           (= port-group 0x80)
           (if (even? port)
             ;; VDP DATA PORT ($BE)
@@ -54,7 +54,7 @@
             ;; VDP STATUS PORT ($BF)
             (do-vdp-io-read! active-vdp vdp/read-status-port! @cpu))
 
-          ;; --- Group 0xC0 to 0xFF ---
+          ;; --- Group 0xC0 to 0xFF --- (0xC0 is 2r11000000)
           (= port-group 0xC0)
           (if (even? port)
             (joypads/read-joypad1)  ;; Even ports ($DC) = P1 Input
@@ -64,13 +64,15 @@
 
     (^void IOWrite [this ^int address ^int data]
       (let [port (memory/signed->unsigned address)
-            port-group (bit-and port 0xC0)]
+            port-group (bit-and port 2r11000000)]
         (cond
           ;; VDP Writes ($80-$BF)
           ;; NOTE: port 0xBF pulls double duty depending on whether the Z80 CPU is writing to it or reading from it.
           ;; When reading, it serves as the status port. When writing it is the control port.
           (= port-group 0x80)
           (if (even? port)
+            ;; Port ($BE) VDP Data Write.
             (swap! active-vdp vdp/data-write! (memory/unsigned->signed data))
+            ;; Port ($BF) VDP Control Write.
             (swap! active-vdp vdp/control-write! data)))
         nil))))
