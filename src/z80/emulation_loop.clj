@@ -124,7 +124,9 @@
           (swap! vdp assoc :vblank-active? false)
           (let [pixels-arr ^ints (.pixels frame-canvas)]
             (dotimes [i (alength pixels-arr)]
-              ;; - (bit-and ... 0x00FFFFFF) completely strips out our internal layer sorting metadata mask.
+              ;; Remember that we pulled a small trick to implement VDP sprite collision in display/draw-single-sprite-line!
+              ;; We should clean it up here. Before a new frame starts getting drawn.
+              ;; - (bit-and ... 0x00FFFFFF) completely strips out our collision metadata.
               ;; - (bit-or 0xFF000000 ...) sets Alpha back to 0xFF (100% opaque) so Quil doesn't render it as black.
               ;; - Wrapped in unchecked-int to suppress Clojure's signed integer overflow arithmetic exceptions.
               (aset pixels-arr i (unchecked-int (bit-or 0xFF000000 (bit-and (aget pixels-arr i) 0x00FFFFFF)))))))))
