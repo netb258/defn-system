@@ -66,12 +66,14 @@
 ;; The below function and the @mapper-banks atom, implement this simple and elegant memory scheme.
 
 (defn- read-byte-from-mapper-slot
-  "Returns an unsigned byte from a provided mapper slot and address."
+  "Returns an unsigned byte from a provided mapper slot and address.
+  The 'slot' parameter should be one of these keywords:
+  :slot0, :slot1, :slot2."
   ^long [slot ^long address ^bytes read-only-memory]
   (let [bank-data (slot @mapper-banks)
         total-banks (quot (alength read-only-memory) 16384)
         ;; Cleanly wraps around using mod calculation if the game is too small to have a third bank.
-        ;; They smallest Master System game shuld be 32KB (or two banks each 16KB).
+        ;; The smallest Master System game shuld be 32KB (or two banks each 16KB).
         safe-bank (mod bank-data total-banks)
         real-offset (+ (* safe-bank 16384) address)]
     (signed->unsigned (aget read-only-memory real-offset))))
