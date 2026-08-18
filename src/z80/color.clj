@@ -31,6 +31,24 @@
         (aset color-palette-cache i (int (q/color r g b)))))
     color-palette-cache))
 
+;; The below function (get-sms-pixel-color-idx) is very important to all graphical output.
+;; In order to understand this function, we must understand how the Master System stores tiles in VRAM.
+;; A tile is basically just a 8x8 grid of colored squares (blocks).
+;; However, inside VRAM, tiles are stored like this:
+;;
+;; Every tile in VRAM (the tiles start at address 0), is composed of exactly 8 of these rows (4 byte rows):
+;; 
+;; Byte 3 (Bitplane 3)       Byte 2 (Bitplane 2)       Byte 1 (Bitplane 1)       Byte 0 (Bitplane 0)
+;; [MSB                 LSB] [MSB                 LSB] [MSB                 LSB] [MSB                 LSB]
+;; +--+--+--+--+--+--+--+--+ +--+--+--+--+--+--+--+--+ +--+--+--+--+--+--+--+--+ +--+--+--+--+--+--+--+--+
+;; |P0|P1|P2|P3|P4|P5|P6|P7| |P0|P1|P2|P3|P4|P5|P6|P7| |P0|P1|P2|P3|P4|P5|P6|P7| |P0|P1|P2|P3|P4|P5|P6|P7|
+;; +--+--+--+--+--+--+--+--+ +--+--+--+--+--+--+--+--+ +--+--+--+--+--+--+--+--+ +--+--+--+--+--+--+--+--+
+;; 
+;; The bytes above contain encoded indexes into the VDP's CRAM.
+;; These CRAM indexes have to be fetched and combined across all 4 bytes in the row.
+;; 
+;; For example, in order to get the color (as a CRAM index) for pixel 2, we need to combine all bits above marked as P2.
+
 (defn get-sms-pixel-color-idx
   "Extracts the exact 4-bit color palette index (0-15) for a specific 
    horizontal pixel (0-7) in a 4bpp planar Sega Master System tile row.
@@ -43,13 +61,13 @@
    Note, that the function works as is when drawing background images. When drawing sprites, 16 needs to be added to the returned index.
 
    Basically, get-vdp-color-palette returns an array and this function retruns an index in that array."
-  ^long [^bytes vram ^long vram-tile-index ^long pixel-y ^long pixel-x]
+  ^long [^bytes vram ^long vram-tile-index ^long pixel-fine-y ^long pixel-fine-x]
   (let [;; Each 8x8 tile is stored as 4bpp (4 bits per pixel). 
         ;; 8 pixels * 4 bits = 32 bits (4 bytes) per vertical row.
         ;; Therefore, a single 8x8 tile takes up exactly 32 bytes of VRAM.
         tile-base-addr (* vram-tile-index 32)
         ;; Each vertical row within the tile spans 4 planar bytes.
-        row-offset (* pixel-y 4)
+        row-offset (* pixel-fine-y 4)
         addr (+ tile-base-addr row-offset)
         ;; --- 4BPP PLANAR UNPACKING ---
         ;; The SMS uses a chunky-planar format where a single pixel's color index is 
@@ -64,19 +82,11 @@
         byte2 (memory/signed->unsigned (aget vram (+ addr 2)))
         byte3 (memory/signed->unsigned (aget vram (+ addr 3)))
         ;; Pixels are ordered from Left to Right (MSB to LSB).
-        ;; Pixel 0 maps to Bit 7 (shift right by 7), Pixel 7 maps to Bit 0 (shift right by 0).
-        shift (- 7 pixel-x)
-        ;; Extract the individual bit contribution for this target pixel from each plane.
-        ;; [byte3] -> Bit 3 (MSB of the final 4-bit index)
-        ;; [byte2] -> Bit 2
-        ;; [byte1] -> Bit 1
-        ;; [byte0] -> Bit 0 (LSB of the final 4-bit index)
-        bit0 (bit-and (bit-shift-right byte0 shift) 2r00000001)
-        bit1 (bit-and (bit-shift-right byte1 shift) 2r00000001)
-        bit2 (bit-and (bit-shift-right byte2 shift) 2r00000001)
-        bit3 (bit-and (bit-shift-right byte3 shift) 2r00000001)]
+        ;; Index 0 (Pixel 0) needs a shift of 7. Index 7 (Pixel 7) needs a shift of 0.
+        shift (- 7 pixel-fine-x)]
     ;; Reconstruct the final 4-bit color index by combining the individual bits
-    (bit-or bit0 
-            (bit-shift-left bit1 1)
-            (bit-shift-left bit2 2)
-            (bit-shift-left bit3 3))))
+    (bit-or
+     (bit-and (bit-shift-right                 byte0 shift)    2r00000001)
+     (bit-and (bit-shift-left (bit-shift-right byte1 shift) 1) 2r00000010)
+     (bit-and (bit-shift-left (bit-shift-right byte2 shift) 2) 2r00000100)
+     (bit-and (bit-shift-left (bit-shift-right byte3 shift) 3) 2r00001000))))
