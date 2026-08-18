@@ -43,13 +43,13 @@
    Note, that the function works as is when drawing background images. When drawing sprites, 16 needs to be added to the returned index.
 
    Basically, get-vdp-color-palette returns an array and this function retruns an index in that array."
-  ^long [^bytes vram ^long tile-index ^long row-y ^long pixel-x]
+  ^long [^bytes vram ^long vram-tile-index ^long pixel-y ^long pixel-x]
   (let [;; Each 8x8 tile is stored as 4bpp (4 bits per pixel). 
         ;; 8 pixels * 4 bits = 32 bits (4 bytes) per vertical row.
         ;; Therefore, a single 8x8 tile takes up exactly 32 bytes of VRAM.
-        tile-base-addr (* tile-index 32)
+        tile-base-addr (* vram-tile-index 32)
         ;; Each vertical row within the tile spans 4 planar bytes.
-        row-offset (* row-y 4)
+        row-offset (* pixel-y 4)
         addr (+ tile-base-addr row-offset)
         ;; --- 4BPP PLANAR UNPACKING ---
         ;; The SMS uses a chunky-planar format where a single pixel's color index is 
