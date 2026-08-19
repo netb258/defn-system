@@ -31,6 +31,7 @@
         (aset color-palette-cache i (int (q/color r g b)))))
     color-palette-cache))
 
+
 ;; The below function (get-sms-pixel-color-idx) is very important to all graphical output.
 ;; In order to understand this function, we must understand how the Master System stores tiles in VRAM.
 ;; A tile is basically just a 8x8 grid of colored squares (blocks).
@@ -60,7 +61,10 @@
    This function returns the CRAM color index for a specific pixel encoded in VRAM.
    Note, that the function works as is when drawing background images. When drawing sprites, 16 needs to be added to the returned index.
 
-   Basically, get-vdp-color-palette returns an array and this function retruns an index in that array."
+   Basically, get-vdp-color-palette returns an array and this function retruns an index in that array.
+   Note, that the pixel position within an 8x8 tile is typically called the FINE offset. We'll stick to that naming.
+   The parameter 'pixel-fine-y' is basically the tile's row.
+   Also 'pixel-fine-x' is the tile's col."
   ^long [^bytes vram ^long vram-tile-index ^long pixel-fine-y ^long pixel-fine-x]
   (let [;; Each 8x8 tile is stored as 4bpp (4 bits per pixel). 
         ;; 8 pixels * 4 bits = 32 bits (4 bytes) per vertical row.
