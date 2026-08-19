@@ -8,6 +8,15 @@
 
 ;; More info on the VPD Registers can be found here: https://www.smspower.org/Development/VDPRegisters
 
+;; Basically the Master System's VRAM is split up like this:
+;; $0000 - $1FFF Graphics for tiles 0 - 255
+;; $2000 - $37FF Graphics for tiles 256 - 447
+;; $3800 - $3EFF Tilemap
+;; $3F00 - $3FFF Sprite Attribute Table (SAT)
+
+;; The code in this module needs to parse the information available in the VDP's registers, the TileMap and the SAT
+;; and then draw the tiles located in VRAM addresses $0000 - $37FF.
+
 ;; Notice that this module does not include Quil. The reason is that all image processing is done on primitive arrays of bytes.
 ;; This way the performance is superior.
 
@@ -80,6 +89,37 @@
        h-scroll-lock?
        v-scroll-lock?
        hide-left-8?)))
+
+;; Apart from the info inside VDP registers (extracted by parse-background-data), the background drawing functions
+;; will also need the info from entries in the Naming Table. These entries are described below:
+;;
+;; Every entry in the Name Table is composed of exactly 2 bytes (stored as Low Byte then High Byte):
+;; 
+;; Byte 0 (Low Byte / Tile Index)
+;; [MSB                         LSB]
+;; +---+---+---+---+---+---+---+---+
+;; |          Tile Index           | 
+;; +---+---+---+---+---+---+---+---+
+;;   7   6   5   4   3   2   1   0
+;;
+;; Byte 1 (High Byte / Control flags)                 
+;; [MSB                                                      LSB]          
+;; +---+---+---+----------+---------+-------+-------+-----------+
+;; |   Unused  | Priority | Palette | VFlip | HFlip | Tile Index|
+;; +---+---+---+----------+---------+-------+-------+-----------+
+;;   7   6   5      4          3        2       1         0                    
+;;
+;; Byte 1 Bits (high byte):
+;; [7-5] - Unused / Reserved
+;; [4]   - Priority (1 = Draw over sprites, 0 = Normal background)
+;; [3]   - Palette selection (1 = Sprite palette, 0 = Background palette)
+;; [2]   - Vertical flip (1 = Flip vertically)
+;; [1]   - Horizontal flip (1 = Flip horizontally)
+;; [0]   - Tile Index Bit 8 (Most Significant Bit of the 9-bit tile index)
+;;
+;; Byte 0 Bits (low byte):
+;; All of them - Tile Index Bits 7-0 (Least Significant Bits of the 9-bit tile index)
+;; Note, that the SMS can store around 500 tiles. 8 bits only represent 0-255 indexes.
 
 (defn- draw-single-background-line-pixel!
   "Renders a single pixel for a scanline, factoring in horizontal/vertical locks, flips and more.
@@ -260,7 +300,8 @@
    ^boolean large-sprites?   ;; Sprite size mode (false = 8x8, true = 8x16)
    ^bytes vram-bytes         ;; VRAM array reference
    ^ints color-palette-cache ;; System color palette cache
-   ^ints img-pixels])        ;; Framebuffer - pixel destination array
+   ^ints img-pixels          ;; Framebuffer - pixel destination array
+   ^boolean shift-sprites-left-8px?]) ;; An early shift in sprite positions is possible (VDP reg 0).
 
 (defn- parse-sprite-data
   "Parses VDP registers and packs them into a single SpriteData record."
@@ -276,7 +317,10 @@
         ;; The X-coordinate and Tile indexes starts exactly 128 bytes past the SAT base.
         sat-info-table   (int (+ sat-base-addr 128))
         large-sprites?   (boolean (sprite-size-16? vdp))
-        sprite-tile-base (int (get-sprite-tile-base vdp))]
+        sprite-tile-base (int (get-sprite-tile-base vdp))
+        ;; Read Register 0 to check for the Early Clock (EC) Sprite Shift flag (Bit 3)
+        reg0             (int (aget vdp-regs 0))
+        shift-sprites-left-8px? (boolean (not= 0 (bit-and reg0 2r00001000)))]
     (SpriteData.
       visible-height
       sat-base-addr
@@ -285,7 +329,53 @@
       large-sprites?
       vram-bytes
       color-palette-cache
-      img-pixels)))
+      img-pixels
+      shift-sprites-left-8px?)))
+
+;; Apart from the info inside VDP registers (extracted by parse-sprite-data), the sprite drawing functions
+;; will also need the info from the Sprite Attribute Table. The SAT is described below:
+;;
+;; NOTE: All coordinates below are global coordinates within the space 256x244.
+;; They are NOT local 'fine' coordinates within the sprite.
+;; 
+;; The Y-Coordinate Table (64 Bytes):
+;; The Sprite Attribute Table starts with a 64-byte block for Y-coordinates.
+;; Each byte corresponds to one sprite index (0 to 63):
+;;
+;; Byte Y (Sprite Y-Position)
+;; [MSB                          LSB]
+;; +---+---+---+---+---+---+---+---+
+;; |        Y - Coordinate         |
+;; +---+---+---+---+---+---+---+---+
+;;   7   6   5   4   3   2   1   0
+;;
+;; Bits 7-0 : Y-Coordinate of the sprite. In SEGA Master System hardware, sprites are always delayed by exactly 1 scanline.
+;;            This delay (relative to position Y) means that emulators must increment Y buy 1, in order for Y to match correctly.
+;;            Value of $D0 (208) acts as a terminator: stops processing subsequent sprites.
+;;
+;; The X-Coordinate & Tile Info Table (128 Bytes / 64 Pairs):
+;; Located immediately after the Y block, this contains 64 pairs of bytes.
+;; For any sprite *i*, the data is located at (SAT_Base + 128 + i*2):
+;;
+;; Byte 1 (Tile Index)                              Byte 0 (Sprite X-Position)
+;; [MSB                          LSB]        [MSB                         LSB]
+;; +---+---+---+---+---+---+---+---+        +---+---+---+---+---+---+---+---+
+;; |          Tile Index           |        |         X - Coordinate        |
+;; +---+---+---+---+---+---+---+---+        +---+---+---+---+---+---+---+---+
+;;   7   6   5   4   3   2   1   0            7   6   5   4   3   2   1   0
+;;
+;; Byte 1 Bits:
+;; [7-0]: Tile Index for the sprite (0 to 255). 
+;;        If 8x16 sprites are enabled, Bit 0 is ignored/forced to 0 for the top tile.
+;;
+;; Byte 0 Bits:
+;; [7-0]: X-Coordinate of the sprite.
+;;
+;; NOTE: This setup explains a lot of stuff going on in parse-sprite-data.
+;; For example, the SAT tile info table is at: (+ sat-base-addr 128).
+;; Also the get-sprite-tile-base function whould now be clear. 
+;; The SAT contains only 1 byte for sprite tile indexes (0-255). But, the SMS can hold around 500 tiles.
+;; We need an additional 1 bit from VDP register 6. This way we have 9 bits (0-511).
 
 ;; NOTE: The sprite drawing functions will also perform VDP collision detection.
 (defn- draw-single-sprite-line!
@@ -308,7 +398,7 @@
 
    NOTE, that we never clear the background layer bit to 0.
    It will be reset to 0 naturally when a new frame is drawn with a fresh background."
-  [^SpriteData ctx pixel-x raw-tile-index tile-row scanline collision-atom]
+  [^SpriteData ctx pixel-x sat-tile-index tile-row scanline collision-atom]
   ;; Extract context fields directly from the primitive record to avoid reflection or map lookups
   (let [sprite-tile-base    (int (.-sprite-tile-base ctx))
         large-sprites?      (boolean (.-large-sprites? ctx))
@@ -320,15 +410,19 @@
         tile-row-offset    (int (quot tile-row 8))
         sized-tile-index   (int (if large-sprites? 
                                   ;; SMS Hardware Rule: Force bit 0 to 0 for 8x16 sprites
-                                  (+ (bit-and (int (memory/signed->unsigned raw-tile-index)) 0xFE) tile-row-offset) 
-                                  raw-tile-index))
+                                  (+ (bit-and (int (memory/signed->unsigned sat-tile-index)) 2r11111110) tile-row-offset) 
+                                  sat-tile-index))
         ;; The absolute, finalized index of the 8-byte graphics pattern (tile) inside VRAM. It will be a number between 0 and 511.
         ;; The SMS can hold a total of 512 tiles (sprite and background tiles included).
         ;; With this index, the tiles are very easy to locate, as they start at VRAM address 0.
         vram-tile-index    (int (+ sized-tile-index sprite-tile-base))
         ;; NOTE: The pixel position within an 8x8 tile is typically called the FINE offset. We'll stick to that naming.
         ;; Remember we are drawing a line here so the y coordinates (the row index) stays static (we loop across x).
-        tile-fine-y        (int (mod tile-row 8))
+        ;; NOTE: Typically tile-row would contain a value between 0 - 7 (which is exactly what we need).
+        ;; However, If we are dealing with 8x16 sprites, then it will contain 0 - 15. Every tile in the SMS is drawn as a single 8x8 tile.
+        ;; Even with 8x16 tiles, the system stores that as two 8x8 tiles in memory and only one 8x8 tile is ever drawn at a time.
+        ;; This means (for 8x16) we should convert the 0 - 15 row indexes to 0 - 7 indexes. This is what the modulo math is doing.
+        tile-fine-y        (if large-sprites? (mod tile-row 8) tile-row)
         render-row         (int (* scanline 256))]
 
     ;; 2. HORIZONTAL PIXEL LOOP
@@ -389,35 +483,34 @@
         ;; Parse and gather VDP constraints into a single record
         ctx                 ^SpriteData (parse-sprite-data @vdp-atom vdp-regs vram-bytes color-palette-cache img-pixels)
         sat-base-addr       (int (.-sat-base-addr ctx))
-        sat-attr-table      (int (.-sat-info-table ctx))
+        sat-info-table      (int (.-sat-info-table ctx))
         sprite-height       (int (if (.-large-sprites? ctx) 16 8))
-        collision-triggered? (atom false)]
+        collision-triggered? (atom false)
+        shift-sprites-left-8px? (boolean (.shift-sprites-left-8px? ctx))]
 
     ;; Loop through all 64 possible sprite descriptors stored inside the Sprite Attribute Table (SAT)
     ;; 1. First, find which sprites actually hit this scanline (up to the 8-sprite limit)
     ;; They will be returned as a verctor of maps.
-    (let [reg0 (aget vdp-regs 0) ;; Read Register 0 to check for the Early Clock (EC) Sprite Shift flag (Bit 3)
-          shift-sprites-left-8px? (not= 0 (bit-and reg0 2r00001000))
-          matching-sprites
+    (let [matching-sprites
           (loop [sprite-id 0 acc []]
             (if (and (< sprite-id 64)) ; Stop at 64 sprites
               (let [y-addr (int (+ sat-base-addr sprite-id))
-                    y-byte (int (memory/signed->unsigned (aget vram-bytes y-addr)))]
-                (if (and (not mode-224?) (= y-byte 0xD0)) acc ;; A vertical coordinate entry of 0xD0 signals the VDP to drop subsequent sprite calculations.
-                  (let [sprite-y   (int (inc y-byte))
+                    sat-y  (int (memory/signed->unsigned (aget vram-bytes y-addr)))]
+                (if (and (not mode-224?) (= sat-y 0xD0)) acc ;; A vertical coordinate entry of 0xD0 signals the VDP to drop subsequent sprite calculations.
+                  (let [sprite-y   (int (inc sat-y))
                         sprite-row (int (- scanline sprite-y))]
                     ;; VERTICAL SCANLINE INTERSECTION CHECK
                     (if (and (>= sprite-row 0) (< sprite-row sprite-height))
                       ;; Sprite intersects with scanline. Gather its data and continue.
                       (let [attr-idx       (int (* sprite-id 2))
-                            x-addr         (int (+ sat-attr-table attr-idx))
+                            x-addr         (int (+ sat-info-table attr-idx))
                             tile-addr      (int (inc x-addr))
-                            sprite-x       (int (memory/signed->unsigned (aget vram-bytes x-addr)))
-                            raw-tile-index (int (memory/signed->unsigned (aget vram-bytes tile-addr)))
+                            sat-x          (int (memory/signed->unsigned (aget vram-bytes x-addr)))
+                            sat-tile-index (int (memory/signed->unsigned (aget vram-bytes tile-addr)))
                             ;; Shift left by 8 pixels only when the VDP Early Clock (Register 0, Bit 3) is active.
                             base-x-offset  (int (if shift-sprites-left-8px? -8 0))
-                            corrected-x    (+ sprite-x base-x-offset)]
-                        (recur (inc sprite-id) (conj acc {:x corrected-x :tile raw-tile-index :sprite-row sprite-row})))
+                            corrected-x    (+ sat-x base-x-offset)]
+                        (recur (inc sprite-id) (conj acc {:x corrected-x :tile-idx sat-tile-index :sprite-row sprite-row})))
                       ;; Didn't intersect, just check the next sprite
                       (recur (inc sprite-id) acc)))))
               acc))]
@@ -425,7 +518,7 @@
       ;; 2. DRAW BACKWARD: Iterate from the end of our list back to index 0
       ;; This guarantees Sprite 0 details overwrite higher indices on the canvas!
       (doseq [sprite (reverse (take 8 matching-sprites))]
-        (draw-single-sprite-line! ctx (:x sprite) (:tile sprite) (:sprite-row sprite) scanline collision-triggered?))
+        (draw-single-sprite-line! ctx (:x sprite) (:tile-idx sprite) (:sprite-row sprite) scanline collision-triggered?))
 
       ;; If the program tried to do more than 8 sprites, then the VDP must keep track of that.
       (when (> (count matching-sprites) 8)
