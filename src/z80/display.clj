@@ -19,6 +19,7 @@
 
 ;; Notice that this module does not include Quil. The reason is that all image processing is done on primitive arrays of bytes.
 ;; This way the performance is superior.
+;; On that NOTE: The functions here GREATLY impact overall performance. Types will be explicitly added as often as possible.
 
 ;; These dimensions should be accurate for a PAL console.
 ;; Notice that they do not do anything inside this module. Just felt like they belong here.
