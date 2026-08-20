@@ -6,6 +6,7 @@
             [z80.display :as display]
             [z80.emulation-loop :as emu-loop]
             [quil.core :as q])
+  ;; NOTE: We are using this Java library to provide a Z80 CPU implementation.
   (:import [com.codingrodent.microprocessor.Z80 Z80Core])
   (:gen-class))
 
@@ -21,6 +22,21 @@
   [^z80.vdp.VdpState vdp]
   (let [cpu-instance (Z80Core. (memory/make-memory-bus) (io-bus/make-io-bus cpu vdp))]
     (reset! cpu cpu-instance)))
+
+;; Once the above function is called, the Z80Core object should be hooked up to all other components.
+
+;; After that we can do (memory/load-rom-into-memory! ROM-AS-BYTES).
+;; Then the Z80Core object can access the loaded ROM at the first memory address 0x00.
+;; After that, we can repeatedly call executeOneInstruction on the 'cpu'. 
+;; The emulation_loop.clj module contains functions that call executeOneInstruction in a loop.
+
+;; The method executeOneInstruction has lines like this:
+;; instruction = memory.readByte(reg_PC)
+;; decodeOneByteInstruction(instruction)
+;; incPC();
+
+;; So, when we first call executeOneInstruction, it will decode the Z80 opcode at address 0x00.
+;; Then, since we are running it in a loop, it will continue to execute machine code from there.
 
 ;; --------------------------------------------------------------------------------------------------
 ;; ------------------------------------------ Main function -----------------------------------------
