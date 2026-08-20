@@ -17,7 +17,7 @@
   hardware has enabled V-Blank Frame Interrupt requests."
   [^z80.vdp.VdpState vdp]
   (let [vdp-regs ^ints (:regs vdp)
-        reg1 (if (> (alength vdp-regs) 1) (aget vdp-regs 1) 0)]
+        reg1 (aget vdp-regs 1)]
     ;; Bit 5 of VDP Register 1 enables the Frame Interrupt (V-Blank IRQ)
     ;; Remember the bits are counted from right to left starting at bit 0.
     (not= 0 (bit-and reg1 2r00100000))))
@@ -27,14 +27,14 @@
   The bits are counted from right to left starting at bit 0."
   [^z80.vdp.VdpState vdp]
   (let [vdp-regs ^ints (:regs vdp)
-        reg0 (if (> (alength vdp-regs) 0) (aget vdp-regs 0) 0)]
+        reg0 (aget vdp-regs 0)]
     (not= 0 (bit-and reg0 2r00010000))))
 
 (defn- get-vdp-reg10
   "Retrieves the value of VDP Register 10 (Scanline target)."
   [^z80.vdp.VdpState vdp]
   (let [vdp-regs ^ints (:regs vdp)]
-    (if (> (alength vdp-regs) 10) (aget vdp-regs 10) 0)))
+    (aget vdp-regs 10)))
 
 ;; NOTE: The method executeOneInstruction has a line like this: instruction = memory.readByte(reg_PC).
 ;; Since the program counter starts out at 0x0000, we should be starting out by reading a single byte form the ROM.
@@ -75,7 +75,7 @@
         (when (< scanline 224)
           (let [vdp-regs    ^ints (:regs @vdp)
                 ;; Bit 3 of VDP Register 1 controls standard 192-line mode vs extended 224-line mode
-                reg1        (int (if (and vdp-regs (>= (alength vdp-regs) 2)) (aget vdp-regs 1) 0))
+                reg1        (int (aget vdp-regs 1))
                 mode-224?   (not= 0 (bit-and reg1 2r00001000))
                 active-limit (if mode-224? 224 192)]
             ;; ALWAYS draw the background line. This ensures that when the system is in 192-line mode,
