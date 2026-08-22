@@ -126,7 +126,16 @@
   "Renders a single pixel for a scanline, factoring in horizontal/vertical locks, flips and more.
   Returns a high-performance closure meant to be run repeatedly across individual horizontal loops.
   Basically the whole thing is one big let form that does a lot of digging/calculating with the VDP's memory
-  and sets a single pixel at the end."
+  and sets a single pixel at the end.
+
+  Tracks backtround/sprite drawing priority using Bit 24 (0x01000000) in the current Quil image layer.
+  NOTE that bit 24 is perfectly safe to use. Quil keeps the frame buffer as an array of ints (32 bits per int).
+  Out of these 32 bits, only 24 bits are the visible RGB values (bits 0 - 23).
+  The last 8 bits (24 - 31) are the alpha channel, they are used for transparancy and are not visible.
+  
+  Usually the sprites get drawin in-front of the background.
+  However, sometimes the background needs to be drawn in-front of the sprites.
+  The corresponding sprite drawing function (draw-single-sprite-line!), checks big 24 and draws accordingly."
   [^BackgroundData cfg ^bytes vram-bytes ^ints color-palette-cache ^ints img-pixels]
   ;; Extract layout configurations once to avoid map property lookups inside the hot inner pixel loop
   (let [naming-table-start (int (:naming-table-start cfg))
@@ -136,8 +145,8 @@
         overscan-color     (int (:overscan-color cfg))
         hide-left-8?       (boolean (:hide-left-8? cfg))]
     (fn [^long pixel-x ^long pixel-y col-v-locked? row-h-locked?]
-            ;; 1. VERTICAL AXIS LOOKUPS
-            ;; If vertical scroll locking is active (for column entries >= 24), bypass VDP scroll offsets.
+      ;; 1. VERTICAL AXIS LOOKUPS
+      ;; If vertical scroll locking is active (for column entries >= 24), bypass VDP scroll offsets.
       (let [scrolled-y       (int (if col-v-locked? pixel-y (+ pixel-y base-scroll-y)))
             ;; Find which tile row (0-27 or 0-31 depending on mode-224) contains the targeted pixel y-coordinate
             tile-row         (int (mod (quot scrolled-y 8) max-rows))
@@ -190,8 +199,8 @@
             ;; - Bit 24: Store Priority State (0 = No priority, 1 = Priority active)
             ;; - Bits 25-28: Store local 4-bit palette color index (0 to 15, to determine background transparency)
             final-pixel   (bit-or (bit-and pixel-color 0x00FFFFFF) 
-                                    (if bg-priority? 0x01000000 0x00000000)
-                                    (bit-shift-left tile-color-idx 25))
+                                  (if bg-priority? 0x01000000 0x00000000)
+                                  (bit-shift-left tile-color-idx 25))
 
             ;; Compute linear destination index for the 256-wide SMS frame buffer
             frame-buffer-idx (int (+ (* pixel-y 256) pixel-x))]
@@ -389,8 +398,8 @@
    
    Tracks hardware sprite-on-sprite pixel collisions using Bit 29 (0x20000000) in the current background layer.
    NOTE that bit 29 is perfectly safe to use. Quil keeps the frame buffer as an array of ints (32 bits per int).
-   Out of these 32 bits, only 24 bits are the visible RGB values.
-   These last 4 bits 31, 30, 29 and 28 are the alpha channel, which we are not using for anything.
+   Out of these 32 bits, only 24 bits are the visible RGB values (bits 0 - 23).
+   The last 8 bits (24 - 31) are the alpha channel, they are used for transparancy and are not visible.
 
    For every horizontal pixel in the sprite (8 in total)
    we are setting a single unused bit in the background layer (matching the same coordinates) to 1.
