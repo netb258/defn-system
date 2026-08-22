@@ -135,7 +135,7 @@
   
   Usually the sprites get drawin in-front of the background.
   However, sometimes the background needs to be drawn in-front of the sprites.
-  The corresponding sprite drawing function (draw-single-sprite-line!), checks big 24 and draws accordingly."
+  The corresponding sprite drawing function (draw-single-sprite-line!), checks bit 24 and draws accordingly."
   [^BackgroundData cfg ^bytes vram-bytes ^ints color-palette-cache ^ints img-pixels]
   ;; Extract layout configurations once to avoid map property lookups inside the hot inner pixel loop
   (let [naming-table-start (int (:naming-table-start cfg))
