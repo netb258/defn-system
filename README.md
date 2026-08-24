@@ -5,6 +5,8 @@ Runs commercial games. Supports battery saves.
 
 Uses a slightly modified version of the Z80Core found in this project: https://github.com/codesqueak/Z80Processor
 
+The code for the modified Z80Core is not in this repo. It can be found here: https://github.com/netb258/custom-Z80Processor
+
 # Controls
 Z is mapped to Button 1.
 
