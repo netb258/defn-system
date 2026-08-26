@@ -145,33 +145,33 @@
         overscan-color     (int (:overscan-color cfg))
         hide-left-8?       (boolean (:hide-left-8? cfg))]
     (fn [^long pixel-x ^long pixel-y col-v-locked? row-h-locked?]
-      ;; 1. VERTICAL AXIS LOOKUPS
-      ;; If vertical scroll locking is active (for column entries >= 24), bypass VDP scroll offsets.
-      (let [scrolled-y       (int (if col-v-locked? pixel-y (+ pixel-y base-scroll-y)))
-            ;; Find which tile row (0-27 or 0-31 depending on mode-224) contains the targeted pixel y-coordinate
-            tile-row         (int (mod (quot scrolled-y 8) max-rows))
+            ;; 1. VERTICAL AXIS LOOKUPS
+            ;; If vertical scroll locking is active (for column entries >= 24), bypass VDP scroll offsets.
+      (let [scrolled-y (int (if col-v-locked? pixel-y (+ pixel-y base-scroll-y)))
+            ;; Find which tile row (0-27) contains the targeted pixel y-coordinate (row can be 0-31 depending on mode-224).
+            tile-row   (int (mod (quot scrolled-y 8) max-rows))
             ;; Calculate the exact fine-Y offset (0 to 7) inside that 8x8 graphic matrix cell
             ;; NOTE: The pixel position within an 8x8 tile is typically called the FINE offset. We'll stick to that naming.
-            fine-y           (int (mod scrolled-y 8))
-            ;; The VDP Name Table is exactly 32 tiles wide (holds data for 32 horizontal tile columns per tile row)
-            table-row-offset (int (* tile-row 32))
+            fine-y     (int (mod scrolled-y 8))
 
             ;; 2. HORIZONTAL AXIS LOOKUPS
             ;; If horizontal scroll locking is active (for tile rows 0 and 1), bypass VDP scroll offsets.
-            scrolled-x      (int (if row-h-locked? pixel-x (memory/signed->unsigned (- pixel-x base-scroll-x))))
+            scrolled-x (int (if row-h-locked? pixel-x (memory/signed->unsigned (- pixel-x base-scroll-x))))
             ;; Find which tile column (0-31) contains the targeted pixel x-coordinate
-            tile-col        (int (quot scrolled-x 8))
+            tile-col   (int (quot scrolled-x 8))
             ;; Calculate the exact fine-X offset (0 to 7) inside that 8x8 graphic matrix cell
-            fine-x          (int (mod scrolled-x 8))
+            fine-x     (int (mod scrolled-x 8))
 
             ;; 3. READ NAME TABLE ENTRY FROM VRAM
             ;; Every background coordinate is represented by a 2-byte descriptor (16 bits)
             ;; NOTE: An entry in the naming table is typically called an NTE (naming table entry). We'll stick to that.
-            nte-idx         (int (+ table-row-offset tile-col))
-            nte-offset      (int (+ naming-table-start (* nte-idx 2)))
+            ;; The VDP Name Table is exactly 32 tiles wide (holds data for 32 horizontal tile columns per tile row)
+            table-row-offset (int (* tile-row 32))
+            nte-idx          (int (+ table-row-offset tile-col))
+            nte-offset       (int (+ naming-table-start (* nte-idx 2)))
 
-            low-byte        (int (memory/signed->unsigned (aget vram-bytes nte-offset)))
-            high-byte       (int (memory/signed->unsigned (aget vram-bytes (unchecked-inc nte-offset))))
+            low-byte         (int (memory/signed->unsigned (aget vram-bytes nte-offset)))
+            high-byte        (int (memory/signed->unsigned (aget vram-bytes (unchecked-inc nte-offset))))
             ;; Bit 0 of High-Byte paired with Low-Byte creates the 9-bit pattern tile index (0 to 511)
             ;; The SMS can hold a total of 512 tiles (sprite and background tiles included).
             ;; With this index, the tiles are very easy to locate, as they start at VRAM address 0.
@@ -217,38 +217,29 @@
   (let [vram-bytes  ^bytes (:vram vdp)
         cram-ints   ^ints (:cram vdp)
         vdp-regs    ^ints (:regs vdp)
-        ;; Pull the system palette configuration out of CRAM (Color RAM holding system colors)
         color-palette-cache ^ints (color/get-vdp-color-palette cram-ints)
         cfg ^BackgroundData (parse-background-data vdp-regs color-palette-cache)
         visible-height (int (:visible-height cfg))
         overscan-color (int (:overscan-color cfg))
         h-scroll-lock? (boolean (:h-scroll-lock? cfg))
         v-scroll-lock? (boolean (:v-scroll-lock? cfg))
-
         ;; Open the pixel array for direct, fast primitive writes.
         img-pixels ^ints (.pixels ^processing.core.PImage background-image)
         draw-pixel! (draw-single-background-line-pixel! cfg vram-bytes color-palette-cache img-pixels)
 
         ;; Remember we are drawing a line here so the y coordinates (the row index) stays static (we loop across x).
         pixel-y (int scanline)
-        tile-y (int (quot pixel-y 8))
         ;; SMS feature: If bit 6 of Reg 0 is set, horizontal scrolling is locked for rows 0 and 1 (game Scoreboard/HUD)
-        row-h-locked? (and h-scroll-lock? (< tile-y 2))]
+        row-h-locked? (and h-scroll-lock? (< pixel-y 16))]
 
-    ;; Check if the current line falls within the currently active VDP video height (192 vs 224 mode)
+    ;; Loop across all 256 horizontal pixels and draw the background.
     (if (< pixel-y visible-height)
-      ;; LOOP 1: Render the 32 tile columns for this scanline.
-      (dotimes [tile-x 32]
-        (let [;; SMS feature: If bit 7 of Reg 0 is set, vertical scrolling is locked for columns 24 to 31 (Side HUD)
-              col-v-locked? (and v-scroll-lock? (>= tile-x 24))]
-          ;; Loop across the 8 horizontal fine pixels belonging to this tile column (each tile consists of 8x8 pixels).
-          ;; NOTE: The pixel position within an 8x8 tile is typically called the FINE offset. We'll stick to that naming.
-          (dotimes [fine-x 8]
-            (let [pixel-x (int (+ (* tile-x 8) fine-x))]
-              (draw-pixel! pixel-x pixel-y col-v-locked? row-h-locked?)))))
+      (dotimes [pixel-x 256]
+        (let [;; SMS feature: Columns 24-31 start at pixel 192 (24 * 8)
+              col-v-locked? (and v-scroll-lock? (>= pixel-x 192))]
+          (draw-pixel! pixel-x pixel-y col-v-locked? row-h-locked?)))
 
-      ;; LOOP 2: Handle offscreen color writing (e.g., lines 193-224 when running in 192-line mode)
-      ;; Blanks out the remainder of the 224-tall texture canvas with the official overscan/border color
+      ;; Handle offscreen overscan border color writing
       (let [render-row-offset (int (* pixel-y 256))]
         (dotimes [pixel-x 256]
           (aset img-pixels (int (+ render-row-offset pixel-x)) overscan-color))))
