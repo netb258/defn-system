@@ -489,19 +489,21 @@
         collision-triggered? (atom false)
         shift-sprites-left-8px? (boolean (.shift-sprites-left-8px? ctx))]
 
-    ;; Loop through all 64 possible sprite descriptors stored inside the Sprite Attribute Table (SAT)
-    ;; 1. First, find which sprites actually hit this scanline (up to the 8-sprite limit)
+    ;; Loop through all 64 possible sprite descriptors stored inside the Sprite Attribute Table (SAT).
+    ;; 1. First, find which sprites actually hit this scanline.
     ;; They will be returned as a verctor of maps.
     (let [matching-sprites
           (loop [sprite-id 0 acc []]
-            (if (and (< sprite-id 64)) ; Stop at 64 sprites
+            (if (< sprite-id 64) ; Stop at 64 sprites
               (let [y-addr (int (+ sat-base-addr sprite-id))
                     sat-y  (int (memory/signed->unsigned (aget vram-bytes y-addr)))]
                 (if (and (not mode-224?) (= sat-y 0xD0)) acc ;; A vertical coordinate entry of 0xD0 signals the VDP to drop subsequent sprite calculations.
-                  (let [sprite-y   (int (inc sat-y))
-                        sprite-row (int (- scanline sprite-y))]
+                  (let [sprite-y      (int (inc sat-y))
+                        sprite-top    sprite-y
+                        sprite-bottom (+ sprite-top sprite-height)
+                        sprite-fine-y (int (- scanline sprite-y))]
                     ;; VERTICAL SCANLINE INTERSECTION CHECK
-                    (if (and (>= sprite-row 0) (< sprite-row sprite-height))
+                    (if (<= sprite-top scanline (dec sprite-bottom))
                       ;; Sprite intersects with scanline. Gather its data and continue.
                       (let [attr-idx       (int (* sprite-id 2))
                             x-addr         (int (+ sat-info-table attr-idx))
@@ -511,7 +513,7 @@
                             ;; Shift left by 8 pixels only when the VDP Early Clock (Register 0, Bit 3) is active.
                             base-x-offset  (int (if shift-sprites-left-8px? -8 0))
                             corrected-x    (+ sat-x base-x-offset)]
-                        (recur (inc sprite-id) (conj acc {:x corrected-x :tile-idx sat-tile-index :sprite-row sprite-row})))
+                        (recur (inc sprite-id) (conj acc {:x corrected-x :tile-idx sat-tile-index :y sprite-fine-y})))
                       ;; Didn't intersect, just check the next sprite
                       (recur (inc sprite-id) acc)))))
               acc))]
@@ -519,7 +521,7 @@
       ;; 2. DRAW BACKWARD: Iterate from the end of our list back to index 0
       ;; This guarantees Sprite 0 details overwrite higher indices on the canvas!
       (doseq [sprite (reverse (take 8 matching-sprites))]
-        (draw-single-sprite-line! ctx (:x sprite) (:tile-idx sprite) (:sprite-row sprite) scanline collision-triggered?))
+        (draw-single-sprite-line! ctx (:x sprite) (:tile-idx sprite) (:y sprite) scanline collision-triggered?))
 
       ;; If the program tried to do more than 8 sprites, then the VDP must keep track of that.
       (when (> (count matching-sprites) 8)
