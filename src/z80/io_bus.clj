@@ -19,6 +19,14 @@
                         updated-vdp)))
     @result))
 
+;; This latch is needed for Language detection.
+;; Just to clarify the naming: A latch is a specialized, temporary data storage mechanism.
+;; The Master System region detection resembles a handshake. A game trying to detect the console's region
+;; will first write data to port 0x3F and then read corresponding data from port 0xDD.
+;; Keep in mind: The final two bits from the JoyPad-2 byte (b6 and b7) are also used for region detection.
+
+(def ^:private port-3f-latch (atom 0xFF))
+
 ;; --- SEGA MASTER SYSTEM I/O BUS ---
 ;; SMS components like Video (VDP) and Joypads are hooked up to the ports here.
 
@@ -42,7 +50,7 @@
           (= port-group 0x40)
           (if (even? port)
             ;; NOTE: The v-counter is basically the current scan-line
-            ;; The h-counter is the current pixel within that scan-line.
+            ;; The h-counter is the current pixel within that scan-line
             (vdp/get-v-counter @active-vdp) ;; Even ports ($40-$7E) = V-Counter
             (vdp/calculate-h-counter @cpu)) ;; Odd ports ($41-$7F)  = H-Counter
 
@@ -57,8 +65,20 @@
           ;; --- Group 0xC0 to 0xFF --- (0xC0 is 2r11000000)
           (= port-group 0xC0)
           (if (even? port)
-            (joypads/read-joypad1)  ;; Even ports ($DC) = P1 Input
-            (joypads/read-joypad2)) ;; Odd ports ($DD)  = P2 Input
+            (joypads/read-joypad1) ;; Even ports ($DC) = P1 Input
+            ;; Odd ports ($DD) = P2 Input + Region/Video Bits
+            (let [joy2 (joypads/read-joypad2)]
+              (cond
+                ;; Game expects Japanese/NTSC response when it writes 0x55
+                (= @port-3f-latch 0x55)
+                (bit-and joy2 2r00111111) ;; Force Bits 6 and 7 to 0
+
+                ;; Game expects Export/PAL response when it writes 0xF5
+                (= @port-3f-latch 0xF5)
+                (bit-or joy2 2r11000000)  ;; Force Bits 6 and 7 to 1
+
+                ;; Default fallback (Standard Export / English mode)
+                :else (bit-or joy2 2r11000000))))
 
           :else 0xFF)))
 
@@ -66,6 +86,10 @@
       (let [port (memory/signed->unsigned address)
             port-group (bit-and port 2r11000000)]
         (cond
+          ;; Intercept writes to Port $3F (System / I/O Control).
+          ;; This is needed for any game trying to test the console region.
+          (and (= port-group 0x00) (= port 0x3F)) (reset! port-3f-latch data)
+
           ;; VDP Writes ($80-$BF)
           ;; NOTE: port 0xBF pulls double duty depending on whether the Z80 CPU is writing to it or reading from it.
           ;; When reading, it serves as the status port. When writing it is the control port.
