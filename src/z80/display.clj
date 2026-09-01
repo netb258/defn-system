@@ -470,6 +470,10 @@
                   ;; because overlapping hidden sprites STILL trigger collisions!
                   (aset img-pixels render-idx marked-bg-pixel))))))))))
 
+;; Notice that draw-background-line! did not take any atoms as arguments. It just needed the VdpState passed to it.
+;; However, this function cannot aford the same luxury.
+;; When a sprite collision or overflow happens it needs to be reported inside the VDP atom.
+
 (defn draw-all-sprites-line-for-scanline!
   "Takes a Quil image with the current background drawn on it.
    Basically draws a single line of all sprites matching the current scanline.
