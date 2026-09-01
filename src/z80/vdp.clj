@@ -2,6 +2,10 @@
   (:require [z80.memory :as memory])
   (:import [com.codingrodent.microprocessor.Z80 Z80Core]))
 
+;; Note, that this VDP implementation will NOT do any actual rendering. That task is handled by another module "display.clj".
+;; We just need the data defined in VdpState to be filled out properly. Particularly :vram, :cram and :regs.
+;; After that "display.clj" can parse this VDP data and do the rendering.
+
 (defrecord VdpState [
   vram
   cram
