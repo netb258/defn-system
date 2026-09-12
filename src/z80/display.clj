@@ -304,6 +304,9 @@
    ^ints img-pixels          ;; Framebuffer - pixel destination array
    ^boolean shift-sprites-left-8px?]) ;; An early shift in sprite positions is possible (VDP reg 0).
 
+;; NOTE: Including img-pixels and vram-bytes in the SpriteData is a bit redundant,
+;; but if we don't do it then (draw-single-sprite-line!) has to take these 2 as arguments (that function already takes 6 args).
+
 (defn- parse-sprite-data
   "Parses VDP registers and packs them into a single SpriteData record."
   [vdp vdp-regs ^bytes vram-bytes ^ints color-palette-cache ^ints img-pixels]
