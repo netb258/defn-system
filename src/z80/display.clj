@@ -181,7 +181,8 @@
             h-flip?         (not= 0 (bit-and high-byte 2r00000010)) ;; Bit 1: Flip tile pixels horizontally
             v-flip?         (not= 0 (bit-and high-byte 2r00000100)) ;; Bit 2: Flip tile pixels vertically
             use-palette-1?  (not= 0 (bit-and high-byte 2r00001000)) ;; Bit 3: Palette select (0 = Palette 0, 1 = Palette 1)
-            palette-offset  (if use-palette-1? 16 0)                ;; System background colors reside in palette entries 16-31
+            ;; NOTE: The background tiles are allowed to use both palette 0 and 1.
+            palette-offset  (if use-palette-1? 16 0)
 
             ;; Map fine coordinates depending on active flip vectors
             render-y        (int (if v-flip? (- 7 fine-y) fine-y))
