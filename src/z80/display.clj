@@ -20,6 +20,8 @@
 ;; Notice that this module does not include Quil. The reason is that all image processing is done on primitive arrays of bytes.
 ;; This way the performance is superior.
 ;; On that NOTE: The functions here GREATLY impact overall performance. Types will be explicitly added as often as possible.
+;; Apart from type hints like ^int, we will also use explicit casts like: (int (:overscan-color cfg)).
+;; This way the code avoids any object boxing / unboxing and works directly with primitive numbers.
 
 ;; These dimensions should be accurate for a PAL console.
 ;; Notice that they do not do anything inside this module. Just felt like they belong here.
@@ -181,7 +183,7 @@
             h-flip?         (not= 0 (bit-and high-byte 2r00000010)) ;; Bit 1: Flip tile pixels horizontally
             v-flip?         (not= 0 (bit-and high-byte 2r00000100)) ;; Bit 2: Flip tile pixels vertically
             use-palette-1?  (not= 0 (bit-and high-byte 2r00001000)) ;; Bit 3: Palette select (0 = Palette 0, 1 = Palette 1)
-            ;; The background tiles are allowed to use both palette 0 and 1. Sprites are locked into palette 1.
+            ;; NOTE: The background tiles are allowed to use both palette 0 and 1. Sprites are locked into palette 1.
             palette-offset  (if use-palette-1? 16 0)
 
             ;; Map fine coordinates depending on active flip vectors
@@ -310,8 +312,10 @@
 
 (defn- parse-sprite-data
   "Parses VDP registers and packs them into a single SpriteData record."
-  [vdp vdp-regs ^bytes vram-bytes ^ints color-palette-cache ^ints img-pixels]
-  (let [;; Extract video display mode and height from Register 1, Bit 3
+  [^z80.vdp.VdpState vdp ^ints color-palette-cache ^ints img-pixels]
+  (let [vdp-regs   ^ints  (:regs vdp)
+        vram-bytes ^bytes (:vram vdp)
+        ;; Extract video display mode and height from Register 1, Bit 3
         reg1             (int (aget ^ints vdp-regs 1))
         mode-224?        (not= 0 (bit-and reg1 2r00001000))
         visible-height   (int (if mode-224? 224 192))
@@ -486,11 +490,10 @@
   [background-image vdp-atom scanline mode-224?]
   (let [vram-bytes          ^bytes (:vram @vdp-atom)
         cram-ints           ^ints  (:cram @vdp-atom)
-        vdp-regs            ^ints  (:regs @vdp-atom)
         color-palette-cache ^ints  (color/get-vdp-color-palette cram-ints)
         img-pixels          ^ints  (.pixels ^processing.core.PImage background-image)
         ;; Parse and gather VDP constraints into a single record
-        ctx                 ^SpriteData (parse-sprite-data @vdp-atom vdp-regs vram-bytes color-palette-cache img-pixels)
+        ctx                 ^SpriteData (parse-sprite-data @vdp-atom color-palette-cache img-pixels)
         sat-base-addr       (int (.-sat-base-addr ctx))
         sat-info-table      (int (.-sat-info-table ctx))
         sprite-height       (int (if (.-large-sprites? ctx) 16 8))
@@ -502,7 +505,7 @@
     ;; They will be returned as a verctor of maps.
     (let [matching-sprites
           (loop [sprite-id 0 acc []]
-            (if (< sprite-id 64) ; Stop at 64 sprites
+            (if (< sprite-id 64) ;; Stop at 64 sprites
               (let [y-addr (int (+ sat-base-addr sprite-id))
                     sat-y  (int (memory/signed->unsigned (aget vram-bytes y-addr)))]
                 (if (and (not mode-224?) (= sat-y 0xD0)) acc ;; A vertical coordinate entry of 0xD0 signals the VDP to drop subsequent sprite calculations.
