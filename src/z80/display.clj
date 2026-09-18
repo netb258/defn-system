@@ -139,7 +139,7 @@
   However, sometimes the background needs to be drawn in-front of the sprites.
   The corresponding sprite drawing function (draw-single-sprite-line!), checks bit 24 and draws accordingly."
   [^BackgroundData cfg ^bytes vram-bytes ^ints color-palette-cache ^ints img-pixels]
-  ;; Extract layout configurations once to avoid map property lookups inside the hot inner pixel loop
+  ;; The returned function will be run in a hot loop. Extract layout configurations once to avoid property lookups inside the hot loop.
   (let [naming-table-start (int (:naming-table-start cfg))
         base-scroll-x      (int (:base-scroll-x cfg))
         base-scroll-y      (int (:base-scroll-y cfg))
