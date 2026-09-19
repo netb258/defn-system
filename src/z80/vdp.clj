@@ -99,7 +99,7 @@
 
       ;; CRAM (Palette) Write
       (= op 3)
-      (let [cram-idx (bit-and loc 0x1F)
+      (let [cram-idx (bit-and loc 2r00011111) ;; We only take 5 bits here, they can represent 32 numbers.
             ^ints cram (.cram vdp)]
         (aset cram cram-idx (int value))))
 
