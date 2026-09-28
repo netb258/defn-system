@@ -27,6 +27,13 @@
 
 (def ^:private port-3f-latch (atom 0xFF))
 
+;; Define atoms to hold the state of the Game Gear Link cable system:
+(def gg-port-01 (atom 0x00)) ;; Parallel Data
+(def gg-port-02 (atom 0xFF)) ;; Data Direction (Usually defaults to inputs/0xFF)
+(def gg-port-03 (atom 0x00)) ;; Transmit Control
+(def gg-port-04 (atom 0xFF)) ;; Receive Status (0xFF implies disconnected/idle)
+(def gg-port-05 (atom 0x00)) ;; Sound Control
+
 ;; --- SEGA MASTER SYSTEM I/O BUS ---
 ;; SMS components like Video (VDP) and Joypads are hooked up to the ports here.
 
@@ -42,9 +49,15 @@
         (cond
           ;; --- Group 0x00 to 0x3F --- (0x00 is 2r00000000)
           (= port-group 0x00)
-          (if (even? port)
-            0xFF ;; Port $00 is generally unmapped/read-only export status or open bus
-            (vdp/get-v-counter @active-vdp)) ;; Odd ports ($01-$3F) return V-Counter!
+          (cond
+            (= port 0x00) (joypads/read-gg-start-button) ;; Port $00 is used for the Game Gear START button.
+            ;; --- These ports control the Gear-to-Gear Link Cable 
+            (= port 0x01) @gg-port-01
+            (= port 0x02) @gg-port-02
+            (= port 0x03) @gg-port-03
+            (= port 0x04) @gg-port-04
+            (= port 0x05) @gg-port-05
+            :else 0xFF)
 
           ;; --- Group 0x40 to 0x7F --- (0x40 is 2r01000000)
           (= port-group 0x40)
@@ -89,6 +102,14 @@
           ;; Intercept writes to Port $3F (System / I/O Control).
           ;; This is needed for any game trying to test the console region.
           (and (= port-group 0x00) (= port 0x3F)) (reset! port-3f-latch data)
+
+          ;; --- These ports control the Gear-to-Gear Link Cable 
+          (= port 0x01) (reset! gg-port-01 data)
+          (= port 0x02) (reset! gg-port-02 data)
+          (= port 0x03) (reset! gg-port-03 data)
+          ;; Note: Port 0x04 is generally read-only status, but some games write to reset flags
+          (= port 0x04) (reset! gg-port-04 data) 
+          (= port 0x05) (reset! gg-port-05 data)
 
           ;; VDP Writes ($80-$BF)
           ;; NOTE: port 0xBF pulls double duty depending on whether the Z80 CPU is writing to it or reading from it.
