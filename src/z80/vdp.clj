@@ -9,15 +9,17 @@
 (defrecord VdpState [
   vram
   cram
+  gg-cram-buffer
   regs
   first-byte?
   command-byte
   vram-pointer
-  operation
+  mode
   read-buffer
   current-scan-line
   sprite-overflow?
   sprite-collision?
+  hblank-active?
   vblank-active?])
 
 ;; NOTE on VDP Registers - Notice that our VDP record below contains an array of 16 registers (:regs (int-array 16)).
@@ -27,17 +29,19 @@
 (defn create-vdp []
   (map->VdpState {
     :vram (byte-array 16384) ;; 16KB of VRAM. Used for pretty much all graphics in an SMS game.
-    :cram (int-array 32)     ;; 32 bytes of cram. Used for color.
+    :cram (int-array 64)     ;; The SMS has 32 bytes of CRAM. Holds 32 colors. However the GG needs 64 bytes (32 colors * 2 bytes each). Using 64 bytes covers the needs of both.
+    :gg-cram-buffer 0        ;; Game Gear specific: The GG uses 12-bit colors, so they require 2 bytes. Holds the low byte of the 12-bit color.
     :regs (int-array 16)     ;; 16 registers. They store valuable info on H/V scrolling locks, Sprite Attribute Tables and more.
     :first-byte? true        ;; Every command the Z80 sends to the VDP control port is 2 bytes long. This is tracked with a 1-bit flip-flop (true/false).
     :command-byte 0          ;; A temporary holding buffer for the first byte of a 2-byte control command.
     :vram-pointer 0          ;; This will be The VDP Video Memory 14 bit Address Pointer.
-    :operation 0             ;; Remembers the current mode (0, 1, 2, or 3) that the VDP is operating in.
+    :mode 0                  ;; Remembers the current mode (0, 1, 2, or 3) that the VDP is operating in.
     :read-buffer 0           ;; Small but fast 8bit VRAM cache.
     :current-scan-line 0     ;; This is basically the V-COUNTER.
     :sprite-overflow? false  ;; The Master System can only have 8 sprites on a single scan-line. The VDP should report if this limit is exceeded.
     :sprite-collision? false ;; Are any sprites colliding currently?
-    :vblank-active? false    ;; Is the CPU executing a V-BLANK interrupt currently?
+    :hblank-active? false    ;; Is the CPU executing an H-BLANK interrupt currently (this gets set during the Z80 instruction loop)?
+    :vblank-active? false    ;; Is the CPU executing a V-BLANK interrupt currently  (this gets set during the Z80 instruction loop)?
     }))
 
 ;; As mentioned above, the VDP can operate in 4 modes:
@@ -83,31 +87,57 @@
   [byte1 byte2]
   (bit-or byte2 (bit-shift-left byte1 8)))
 
-(defn data-write!
-  "Writes 'value' to either the VDP's VRAM or CRAM.
-  After the performing the write, returns the next state that the VDP should transition to."
-  [^VdpState vdp ^long value]
-  (let [op (int (.operation vdp))
+(defn- move-to-next-vram-addr
+  "Returns a VDP state that is ready to read the next value in VRAM."
+  [^VdpState vdp ^long current-vram-address ^long current-vram-value]
+  (-> vdp
+      (assoc :vram-pointer (take-14-bits (inc current-vram-address)))
+      (assoc :read-buffer current-vram-value)
+      (assoc :first-byte? true)))
+
+(defn- do-gg-cram-write!
+  "WRITING to the Game Gear's CRAM is more work than with the Master System.
+   Since all colors require 2 bytes, we need to cache the first byte and wait for the second.
+   Keep in mind, READING from CRAM is the same in both systems. It simply happens one byte at a time."
+  [^VdpState vdp ^long loc ^long value]
+  (let [cram-addr (bit-and loc 2r00111111) ;; GG has 64 bytes/indexes in CRAM, so we need 6 bits.
+        is-even? (zero? (bit-and cram-addr 2r00000001))
+        ^ints cram (.cram vdp)]
+    (if is-even?
+      ;; Even byte: Just cache it in the CRAM buffer, don't write to CRAM yet
+      (-> (move-to-next-vram-addr vdp loc value)
+          (assoc :gg-cram-buffer (memory/signed->unsigned value)))
+
+      ;; Odd byte: Combine cached even byte with current odd byte and write to CRAM
+      (let [even-byte (:gg-cram-buffer vdp)
+            odd-byte (memory/signed->unsigned value)
+            ;; Storing them safely into sequential indices in our int-array
+            even-cram-idx (dec cram-addr)
+            odd-cram-idx cram-addr]
+        (aset cram even-cram-idx (int even-byte))
+        (aset cram odd-cram-idx (int odd-byte))
+        (move-to-next-vram-addr vdp loc value)))))
+
+(defn data-write! [^VdpState vdp ^long value]
+  (let [op (int (.mode vdp))
         loc (int (.vram-pointer vdp))]
     (cond
-      ;; VRAM Write
-      ;; Even though the docs say that only Mode 1 is VRAM write, the actual hardware behaves like this.
+      ;; --- VRAM Write (Modes 0, 1, 2) ---
       (or (= op 0) (= op 1) (= op 2))
       (let [address (take-14-bits loc)
             ^bytes vram (.vram vdp)]
-        (aset vram address (memory/unsigned->signed value)))
+        (aset vram address (unchecked-byte value))
+        (move-to-next-vram-addr vdp loc value))
 
-      ;; CRAM (Palette) Write
+      ;; --- CRAM (Palette) Write (Mode 3) ---
       (= op 3)
-      (let [cram-idx (bit-and loc 2r00011111) ;; We only take 5 bits here, they can represent 32 numbers.
-            ^ints cram (.cram vdp)]
-        (aset cram cram-idx (int value))))
+      (if @memory/gg-rom-selected? (do-gg-cram-write! vdp loc value)
+        (let [cram-idx (bit-and loc 2r00011111) ;; We only take 5 bits here, they can represent 32 numbers.
+              ^ints cram (.cram vdp)]
+          (aset cram cram-idx (int value))
+          (move-to-next-vram-addr vdp loc value)))
 
-    (-> vdp
-        (assoc :vram-pointer (take-14-bits (inc loc)))
-        ;; FIX for FluBBa VDP test 9: Hardware writes to the data port explicitly overwrite the read buffer!
-        (assoc :read-buffer value)
-        (assoc :first-byte? true))))
+      :else (move-to-next-vram-addr vdp loc value))))
 
 (defn data-read!
   "Reads a single byte from the VDP's VRAM.
@@ -121,13 +151,8 @@
         ;; 1. The CPU receives what was ALREADY sitting in the hardware buffer
         return-val (memory/signed->unsigned (.read-buffer vdp))
         ;; 2. Prefetch the NEXT byte from VRAM into the buffer for the next read
-        next-buffered-val (memory/signed->unsigned (aget vram-arr address))
-        ;; 3. Increment and wrap the VRAM address pointer
-        next-loc (take-14-bits (inc loc))]
-    [return-val (assoc vdp 
-                       :vram-pointer next-loc 
-                       :read-buffer next-buffered-val
-                       :first-byte? true)]))
+        next-buffered-val (memory/signed->unsigned (aget vram-arr address))]
+    [return-val (move-to-next-vram-addr vdp loc next-buffered-val)]))
 
 ;; Before the Z80 can instruct the VDP to perform one of it's 4 modes (VRAM Read, VRAM Write, VDP Register Write, CRAM Write)
 ;; it must first write two bytes to the VDP control port. Those two bytes will set the VDP in the proper state
@@ -154,7 +179,7 @@
           new-loc (bit-or (bit-and old-loc 2r11111100000000) clean-val)
           
           ;; Hardware Prefetch: If currently in Read Mode (op 0), update read-buffer instantly!
-          op (int (.operation vdp))
+          op (int (.mode vdp))
           ^bytes vram-arr (.vram vdp)
           updated-buffer (if (= op 0) 
                            (memory/signed->unsigned (aget vram-arr (take-14-bits new-loc))) 
@@ -181,12 +206,12 @@
               vram-val (memory/signed->unsigned (aget vram-arr new-loc))]
           (assoc vdp
                  :vram-pointer (inc new-loc)
-                 :operation code-type
+                 :mode code-type
                  :read-buffer vram-val
                  :first-byte? true))
 
         ;; Mode 1: VRAM Write
-        (= code-type 1) (assoc vdp :vram-pointer new-loc :operation code-type :first-byte? true)
+        (= code-type 1) (assoc vdp :vram-pointer new-loc :mode code-type :first-byte? true)
 
         ;; Mode 2: VDP Register Write (Top bits are 10xx xxxx)
         (= code-type 2)
@@ -197,7 +222,7 @@
 
         ;; Mode 3: CRAM Pointer Setup (Top bits are 11xx xxxx)
         ;; The operation must be set to 3 so data-write! knows to route incoming bytes to CRAM.
-        (= code-type 3) (assoc vdp :vram-pointer new-loc :operation 3 :first-byte? true)
+        (= code-type 3) (assoc vdp :vram-pointer new-loc :mode 3 :first-byte? true)
         :else (assoc vdp :first-byte? true)))))
 
 ;; NOTE: The VDP status port should report a few statuses. First and foremost:
@@ -228,5 +253,6 @@
     [current-status (assoc vdp 
                            :first-byte? true 
                            :vblank-active? false
+                           :hblank-active? false
                            :sprite-overflow? false
                            :sprite-collision? false)]))
