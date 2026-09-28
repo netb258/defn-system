@@ -2,6 +2,10 @@
   (:require [clojure.java.io :as io])
   (:import [com.codingrodent.microprocessor IMemory]))
 
+;; The emulator can set this atom to true if the user is running a Game Gear ROM.
+;; I didn't know where to put this one. Ultimately chose the memory module.
+(def gg-rom-selected? (atom false))
+
 ;; NOTE: A complete Memory Map can be found here: https://www.smspower.org/Development/MemoryMap
 
 ;; --- SEGA MASTER SYSTEM MEMORY LAYOUT ---
@@ -152,22 +156,26 @@
 ;; NOTE: We are using delay, because we want to wait for the @rom to be loaded by load-rom-into-memory!
 (def ^:private sram-file-path (delay (str (md5-hash @rom) ".sav")))
 
-;; Standard SMS Cartridge RAM is usually 8KB or 16KB. We allocate 16KB.
+;; Standard SMS Cartridge RAM is usually 8KB or 16KB.
+;; However, some Game Gear games come with 32KB of SRAM (for example Shining Force).
+;; Allocating 32KB covers the needs of both consoles.
 (def ^{:tag 'bytes :private true} cart-sram 
   (delay
     (let [file (io/file @sram-file-path)]
       (if (.exists file)
         (with-open [xin (io/input-stream file)]
-          (let [buf (byte-array 16384)]
+          (let [buf (byte-array 32768)]
             (.read xin buf)
             buf))
-        (byte-array 16384)))))
+        (byte-array 32768)))))
 
-(defn- save-sram-to-disk!
-  "Flushes the current in-memory Cartridge SRAM to a local file."
+(defn save-sram-to-disk!
+  "Flushes the current in-memory Cartridge SRAM to a local file.
+   The whole operation is skipped if SRAM is empty."
   []
-  (with-open [xout (io/output-stream @sram-file-path)]
-    (.write xout ^bytes @cart-sram)))
+  (when (not (every? zero? @cart-sram))
+    (with-open [xout (io/output-stream @sram-file-path)]
+      (.write xout ^bytes @cart-sram))))
 
 (defn- sram-enabled? 
   "Returns true if the SRAM enable bit (Bit 3) was set in port 0xFFFC."
@@ -175,10 +183,14 @@
   (not= 0 (bit-and @sram-control 2r00001000)))
 
 (defn- get-sram-offset
-  "Calculates the offset in SRAM based on Address and Bank Select bit (Bit 2)."
+  "Calculates the offset in SRAM based on Address and Bank Select bit (Bit 2).
+   This is necessary, because the Sega Mapper is active for SRAM as well and will break it up into banks.
+   The mapper chip can only break up SRAM into two banks."
   ^long [^long address]
-  (let [bank (if (not= 0 (bit-and @sram-control 2r00000100)) 8192 0)
-        sram-relative-addr (mod (- address 0x8000) 8192)]
+  (let [slot-size   16384
+        slot2-start 0x8000
+        bank (if (not= 0 (bit-and @sram-control 2r00000100)) slot-size 0)
+        sram-relative-addr (- address slot2-start)]
     (+ bank sram-relative-addr)))
 
 ;; --------------------------------------------------------------------------------------------------
@@ -233,8 +245,7 @@
         ;; Write to Slot 2 SRAM (if enabled by the game)
         (and (>= address 0x8000) (< address ram-start) (sram-enabled?))
         (do
-          (aset-byte @cart-sram (get-sram-offset address) (unsigned->signed value))
-          (save-sram-to-disk!)) ;; Save to file instantly on write
+          (aset-byte @cart-sram (get-sram-offset address) (unsigned->signed value)))
         ;; ROM Space is otherwise read-only
         (< address ram-start) nil 
         ;; Write to main Work RAM
