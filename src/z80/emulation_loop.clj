@@ -41,7 +41,7 @@
 (defn- do-instruction-loop!
   "Executes a single PAL frame scanline-by-scanline (313 lines total).
   Runs the CPU instructions and draws the graphics."
-  [^com.codingrodent.microprocessor.Z80.Z80Core cpu ^z80.vdp.VdpState vdp]
+  [^com.codingrodent.microprocessor.Z80.Z80Core cpu vdp-atom]
   (let [;; PAL Sega Master System metrics: 313 total scanlines per frame (0 to 312).
         lines-per-frame 313
         ;; Every scanline lasts exactly 228 CPU T-states (cycles). 
@@ -49,7 +49,7 @@
         cycles-per-line 228
         ;; The VDP's register 10 holds a counter that is crucial the the timing of the H-BLANK.
         ;; The Master System triggers an H-BLANK interrupt only if this counter rolls over below zero.
-        line-interrupt-counter (atom (get-vdp-reg10 @vdp))
+        line-interrupt-counter (atom (get-vdp-reg10 @vdp-atom))
         ;; Extract the raw PImage canvas object out of the atom container once per frame
         frame-canvas ^processing.core.PImage @global-frame-buffer]
 
@@ -61,7 +61,15 @@
             target-tstates (+ start-tstates cycles-per-line)]
 
         ;; Keep VDP state synchronized with the current horizontal scan-line.
-        (swap! vdp assoc :current-scan-line scanline)
+        (swap! vdp-atom assoc :current-scan-line scanline)
+
+        ;; Contrary to intuition, the interrupts need to be fired before executing the CPU instructions.
+        (let [vdp-state @vdp-atom
+              vblank-asserted? (and (:vblank-active? vdp-state) (vblank-irq-enabled? vdp-state))
+              hblank-asserted? (and (:hblank-active? vdp-state) (hblank-irq-enabled? vdp-state))]
+          (if (or vblank-asserted? hblank-asserted?)
+            (.setInterrupt cpu true)
+            (.setInterrupt cpu false)))
 
         ;; 1. PROCESS Z80 CPU INSTRUCTIONS FOR THIS SCANLINE
         ;; Step the Z80 processor repeatedly until it consumes exactly 228 cycle T-states.
@@ -73,17 +81,17 @@
         ;; 2. RUN LINE RENDERING FUNCTIONS
         ;; Only render within the standard 224-line limit.
         (when (< scanline 224)
-          (let [vdp-regs    ^ints (:regs @vdp)
+          (let [vdp-regs    ^ints (:regs @vdp-atom)
                 ;; Bit 3 of VDP Register 1 controls standard 192-line mode vs extended 224-line mode
                 reg1        (int (aget vdp-regs 1))
                 mode-224?   (not= 0 (bit-and reg1 2r00001000))
                 active-limit (if mode-224? 224 192)]
             ;; ALWAYS draw the background line. This ensures that when the system is in 192-line mode,
             ;; lines 192 to 223 automatically drop into the overscan loop to draw a clean uniform border.
-            (display/draw-background-line! @vdp frame-canvas scanline)
+            (display/draw-background-line! @vdp-atom frame-canvas scanline)
             ;; ONLY compute foreground sprites and run collision grid checks during active video display lines
             (when (< scanline active-limit)
-              (display/draw-all-sprites-line-for-scanline! frame-canvas vdp scanline mode-224?))))
+              (display/draw-all-sprites-line-for-scanline! frame-canvas vdp-atom scanline mode-224?))))
 
         ;; 3. HANDLE H-BLANK
         ;; The VDP line counter decrements on every active scanline.
@@ -94,17 +102,16 @@
             (if (< new-count 0)
               (do
                 ;; Counter underflowed! Reload from VDP Register 10
-                (reset! line-interrupt-counter (get-vdp-reg10 @vdp))
+                (reset! line-interrupt-counter (get-vdp-reg10 @vdp-atom))
                 ;; Trigger CPU Interrupt if the game requested H-Blank IRQs
                 ;; We have just processed a whole single scan-line with the loop above.
                 ;; So, we can trigger an interrupt to let the game know there is a short time
                 ;; before we snap back and process another scan-line.
-                (when (hblank-irq-enabled? @vdp)
-                  (.setInterrupt cpu true)))
+                (swap! vdp-atom assoc :hblank-active? true))
               ;; Decrement counter normally
               (reset! line-interrupt-counter new-count)))
           ;; Outside the active window, the counter continually reloads from Register 10
-          (reset! line-interrupt-counter (get-vdp-reg10 @vdp)))
+          (reset! line-interrupt-counter (get-vdp-reg10 @vdp-atom)))
 
         ;; 4. HANDLE V-BLANK
         ;; Trigger a VBlank on the last visible scanline, so that games have time to update
@@ -114,23 +121,13 @@
         ;; Games use this window to: Update sprite positions (moving characters, enemies, projectiles),
         ;; Load new tile graphics into VDP memory and more.
         (when (= scanline 193)
-          (swap! vdp assoc :vblank-active? true)
-          (when (vblank-irq-enabled? @vdp)
-            (.setInterrupt cpu true)))
+          (swap! vdp-atom assoc :vblank-active? true))
 
-        ;; 5. END OF FRAME CLEANUP
-        ;; On the very last scanline of the PAL cycle loop, sanitize the image buffer pixels.
+        ;; 5. END OF FRAME
+        ;; This is the very last scanline of the PAL cycle loop.
         (when (= scanline 312)
-          (swap! vdp assoc :vblank-active? false)
-          (let [pixels-arr ^ints (.pixels frame-canvas)]
-            (dotimes [i (alength pixels-arr)]
-              ;; Remember that we pulled a small trick to implement VDP sprite collision in display/draw-single-sprite-line!
-              ;; We should clean it up here. Before a new frame starts getting drawn.
-              ;; - (bit-and ... 0x00FFFFFF) completely strips out our collision metadata.
-              ;; - (bit-or 0xFF000000 ...) sets Alpha back to 0xFF (100% opaque) so Quil doesn't render it as black.
-              ;; - Wrapped in unchecked-int to suppress Clojure's signed integer overflow arithmetic exceptions.
-              (aset pixels-arr i (unchecked-int (bit-or 0xFF000000 (bit-and (aget pixels-arr i) 0x00FFFFFF)))))))))
-    ;; Finalize mutations and push the primitive pixel array modifications back into the Quil canvas
+          (swap! vdp-atom assoc :vblank-active? false))))
+    ;; This is where the finalized frame is rendered.
     (.updatePixels frame-canvas)))
 
 ;; --------------------------------------------------------------------------------------------------
@@ -140,8 +137,10 @@
 ;; This function will prepare everything needed for the instruction loop to run.
 (defn make-setup-function [^com.codingrodent.microprocessor.Z80.Z80Core cpu]
   (fn []
-    ;; This should be the accurate FPS for a PAL console.
-    (q/frame-rate 50)
+    ;; Technically we are emulating a PAL Master System and the FPS should be 50.
+    ;; However, all Game Gear consoles run at 60 FPS no matter the region.
+    ;; Setting the FPS to 60 covers both consoles.
+    (q/frame-rate 60)
     (reset! global-frame-buffer (q/create-image 256 224 :rgb))
     (memory/reset-emulator cpu)
     (println "Sega Master System initialized with Sega Mapper support. Running real-time cycle loop...")))
@@ -153,14 +152,6 @@
   []
   (.textureSampling (q/current-graphics) 2))
 
-(defn draw-scanlines! [screen-width screen-height opacity]
-  (q/stroke 0 0 0 opacity) ; Black lines with custom transparency (0-255)
-  (q/stroke-weight 1)      ; 1 pixel thick lines
-  (loop [y 0]
-    (when (< y screen-height)
-      (q/line 0 y screen-width y)
-      (recur (+ y 5)))))    ; Skip every 5th line to create the gaps
-
 ;; This function will call the instruction loop 50 times a second:
 (defn make-draw-function [^com.codingrodent.microprocessor.Z80.Z80Core cpu ^z80.vdp.VdpState vdp]
   (fn []
@@ -168,7 +159,13 @@
     (do-instruction-loop! cpu vdp)
     ;; 2. Force Nearest Neighbor sampling. I want the image blocky.
     (set-nearest-neighbor!)
-    ;; Decited against visible scanlines.
-    ;; (draw-scanlines! display/screen-width display/screen-height 40)
     ;; 3. Paint the fully constructed frame directly from the buffer
-    (q/image @global-frame-buffer 0 0 display/screen-width display/screen-height)))
+    (let [screen-dimensions (display/get-screen-width-and-hieght)
+          screen-width  (first screen-dimensions)
+          screen-height (second screen-dimensions)
+          ;; Extract the centered Game Gear 160x144 window (X: 48 to 207, Y: 24 to 167)
+          ;; We will draw this limited area only if a Game Gear rom is selected.
+          gg-viewport (.get ^processing.core.PImage @global-frame-buffer 48 24 160 144)]
+      (if @memory/gg-rom-selected?
+        (q/image gg-viewport 0 0 screen-width screen-height)
+        (q/image @global-frame-buffer 0 0 screen-width screen-height)))))
