@@ -42,7 +42,7 @@
 ;; ------------------------------------------ Main function -----------------------------------------
 ;; --------------------------------------------------------------------------------------------------
 
-(defn start-emulator [rom-path]
+(defn -main [rom-path]
   (let [active-vdp (atom (vdp/create-vdp))]
     (when (clojure.string/ends-with? rom-path ".gg") (reset! memory/gg-rom-selected? true))
     (construct-cpu! active-vdp)
