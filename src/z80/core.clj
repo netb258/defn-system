@@ -17,8 +17,8 @@
 
 (defn construct-cpu!
   "This function will tie all components together.
-  It will construct a Z80Core CPU and pass it a Memory Bus that knows how to communicate between CPU/RAM/ROM.
-  It will also pass it a proper IO-BUS that know how to communicate between CPU/VDP/JoyPads."
+  It will construct a valid Z80Core CPU and pass it a Memory Bus that knows how to communicate between CPU/RAM/ROM.
+  It will also pass it a valid IO-BUS that know how to communicate between CPU/VDP/JoyPads."
   [^z80.vdp.VdpState vdp]
   (let [cpu-instance (Z80Core. (memory/make-memory-bus) (io-bus/make-io-bus cpu vdp))]
     (reset! cpu cpu-instance)))
@@ -42,21 +42,24 @@
 ;; ------------------------------------------ Main function -----------------------------------------
 ;; --------------------------------------------------------------------------------------------------
 
-(defn -main [& args]
-  ;; The ROM path must be provided as a command line argument.
-  (if (empty? args) (println "Please supply the path to a ROM as a command line argument.")
-    ;; Create all components, starting with the VDP and load a ROM into memory.
-    (let [active-vdp (atom (vdp/create-vdp))]
-      (construct-cpu! active-vdp)
-      (memory/load-rom-into-memory! (java.nio.file.Files/readAllBytes (java.nio.file.Paths/get (first args) (into-array String []))))
-      (q/defsketch sms-screen
-        :title "DeFn System"
-        ;; NOTE: These two functions really kick off the emulation.
-        ;; The setup/draw functions will start the Z80 instruction loop and draw the result to the screen.
-        :setup (emu-loop/make-setup-function @cpu)
-        :draw (emu-loop/make-draw-function @cpu active-vdp)
-        :key-pressed (joypads/make-key-press-handler @cpu)
-        :key-released (joypads/make-key-release-handler)
-        :renderer :opengl
-        :features [:exit-on-close]
-        :size [display/screen-width display/screen-height]))))
+(defn start-emulator [rom-path]
+  (let [active-vdp (atom (vdp/create-vdp))]
+    (when (clojure.string/ends-with? rom-path ".gg") (reset! memory/gg-rom-selected? true))
+    (construct-cpu! active-vdp)
+    (memory/load-rom-into-memory! (java.nio.file.Files/readAllBytes (java.nio.file.Paths/get rom-path (into-array String []))))
+    (q/defsketch sms-screen
+      :title "DeFn System"
+      ;; NOTE: These two functions really kick off the emulation.
+      ;; The setup/draw functions will start the Z80 instruction loop and draw the result to the screen.
+      :setup (emu-loop/make-setup-function @cpu)
+      :draw  (emu-loop/make-draw-function @cpu active-vdp)
+      :key-pressed  (joypads/make-key-press-handler @cpu)
+      :key-released (joypads/make-key-release-handler)
+      ;; This executes exactly once right as the Quil window closes
+      ;; This is the proper way to save SRAM, especially for the Game Gear as some games use it to supplement
+      ;; the system's 8KB of work RAM. For example Shinig Force Gaiden actively does this.
+      ;; The game makes thousands of writes per second to SRAM, so constantly saving to disk is wasteful.
+      :on-close (fn [] (memory/save-sram-to-disk!))
+      :features [:exit-on-close]
+      :renderer :opengl
+      :size (display/get-screen-width-and-hieght))))
