@@ -23,11 +23,27 @@
 ;; Apart from type hints like ^int, we will also use explicit casts like: (int (:overscan-color cfg)).
 ;; This way the code avoids any object boxing / unboxing and works directly with primitive numbers.
 
-;; These dimensions should be accurate for a PAL console.
+;; These dimensions should be accurate for a SMS PAL console (and a Game Gear).
 ;; Notice that they do not do anything inside this module. Just felt like they belong here.
-(def scale 4)
-(def screen-width (* 256 scale))
-(def screen-height (* 224 scale))
+
+(def sms-width 256)
+(def sms-height 224)
+
+(def gg-width 160)
+(def gg-height 140)
+
+(def sms-scale 4)
+(def gg-scale 6)
+
+(defn get-screen-width-and-hieght
+  "Takes no arguments and returns a vector with 2 numbers inside it (width follower by height)."
+  []
+  (let [width  (if @memory/gg-rom-selected? gg-width  sms-width)
+        height (if @memory/gg-rom-selected? gg-height sms-height)
+        scale  (if @memory/gg-rom-selected? gg-scale  sms-scale)
+        screen-width  (* width scale)
+        screen-height (* height scale)]
+    [screen-width screen-height]))
 
 ;; --------------------------------------------------------------------------------------------------
 ;; ------------------------------------- Background Display Code ------------------------------------
