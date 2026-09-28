@@ -1,13 +1,17 @@
 (ns z80.joypads
-  (:require [quil.core :as q])
+  (:require [quil.core :as q]
+            [z80.memory :as memory])
   (:import java.awt.event.KeyEvent))
 
 ;; Default state is 0xFF (all bits 1 = all buttons unpressed)
 (def ^:private joypad-p1 (atom 2r11111111))
 (def ^:private joypad-p2 (atom 2r11111111))
+;; The Game Gear's START button (Bit 7 of Port 0x00). Only this bit counts: 2r10000000.
+(def ^:private gg-start-button (atom 2r11111111))
 
 (defn read-joypad1 [] @joypad-p1)
 (defn read-joypad2 [] @joypad-p2)
+(defn read-gg-start-button [] @gg-start-button)
 
 ;; On a standard SMS joypad, 0 means pressed and 1 means unpressed (active low). When no buttons are held, ports 0xDC and 0xDD must return 0xFF.
 
@@ -71,7 +75,9 @@
         ;; Intercept the pause key and fire an NMI directly into the Java Z80 core (to pause the CPU)
         ;; The Master System did not feature a pouse button on the JoyPad. The pause button was placed on the console itself.
         ;; When this button was pressed, it issued a non maskable interrupt that the CPU cannot ignore.
-        (.setNMI cpu)
+        (if @memory/gg-rom-selected?
+          (swap! gg-start-button set-pressed 2r10000000)
+          (.setNMI cpu))
         ;; Otherwise, run the existing controller port code
         (do
           ;; Player 1
@@ -89,6 +95,8 @@
   []
   (fn []
     (let [user-input (get-key)]
+      (when (and (= user-input \newline) @memory/gg-rom-selected?)
+        (swap! gg-start-button set-released 2r10000000))
       ;; Player 1
       (when-let [bit-p1 (get p1-key-map user-input)]
         (swap! joypad-p1 set-released bit-p1))
