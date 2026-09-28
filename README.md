@@ -50,4 +50,8 @@ java -jar defn-system-with-gui.jar
     <td><img src="./screenshots/screen9.png?raw=true" alt="Screen 9" width="100%"></td>
     <td><img src="./screenshots/screen10.png?raw=true" alt="Screen 10" width="100%"></td>
   </tr>
+  <tr>
+    <td><img src="./screenshots/screen11.png?raw=true" alt="Screen 11" width="100%"></td>
+    <td><img src="./screenshots/screen12.png?raw=true" alt="Screen 12" width="100%"></td>
+  </tr>
 </table>
