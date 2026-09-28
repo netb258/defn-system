@@ -21,16 +21,49 @@
         scale (fn [v] (int (* v 85)))]
     [(scale r) (scale g) (scale b)]))
 
-(defn get-vdp-color-palette
-  "Checks the entire 32-byte CRAM memory of the VDP and returns all 32 colors.
-   Indices 0-15 are for backgrounds, indices 16-31 are for sprites."
+(defn- gg-color->rgb
+  "Converts a Game Gear 12-bit color stored across two sequential CRAM bytes into a standard 0-255 RGB vector.
+   The two GG color bytes have this format:
+   Even Byte (Low Address): GGGG RRRR
+   Odd Byte (High Address): xxxx BBBB"
+  [even-byte odd-byte]
+  (let [b0 (memory/signed->unsigned (int even-byte))
+        b1 (memory/signed->unsigned (int odd-byte))
+        g (bit-shift-right (bit-and b0 2r11110000) 4) ;; Upper nibble of even byte is Green
+        r (bit-and b0 2r00001111)                     ;; Lower nibble of even byte is Red
+        b (bit-and b1 2r00001111)                     ;; Lower nibble of odd byte is Blue
+        ;; Scale up 0-15 native color range to 0-255 range (15 * 17 = 255)
+        scale (fn [v] (int (* v 17)))]
+    [(scale r) (scale g) (scale b)]))
+
+(defn- get-gg-color-palette
+  "Returns all 32 Game Gear colors by parsing the 64 sequential CRAM bytes (passed as args).
+   Indices 0-15 are for backgrounds, indices 16-31 are for sprites.
+   The colors are returned as standard 0-255 RGB vector that Quil can work with."
   ^ints [^ints vdp-cram-as-int-array]
   (let [color-palette-cache (int-array 32)]
+    ;; Compile the 32 Game Gear colors by reading byte-pairs from CRAM
     (dotimes [i 32]
-      (let [[r g b] (sms-color->rgb (aget vdp-cram-as-int-array i))]
+      (let [even-idx (* i 2)
+            odd-idx (inc even-idx)
+            even-byte (aget vdp-cram-as-int-array even-idx)
+            odd-byte (aget vdp-cram-as-int-array odd-idx)
+            [r g b] (gg-color->rgb even-byte odd-byte)]
         (aset color-palette-cache i (int (q/color r g b)))))
     color-palette-cache))
 
+(defn get-vdp-color-palette
+  "Checks the entire SMS 32-byte CRAM memory of the VDP and returns all 32 colors.
+   This function is also compatible with the Game Gear CRAM and color format.
+   Indices 0-15 are for backgrounds, indices 16-31 are for sprites.
+   The colors are returned as standard 0-255 RGB vector that Quil can work with."
+  ^ints [^ints vdp-cram-as-int-array]
+  (if @memory/gg-rom-selected? (get-gg-color-palette vdp-cram-as-int-array)
+    (let [color-palette-cache (int-array 32)]
+      (dotimes [i 32]
+        (let [[r g b] (sms-color->rgb (aget vdp-cram-as-int-array i))]
+          (aset color-palette-cache i (int (q/color r g b)))))
+      color-palette-cache)))
 
 ;; The below function (get-sms-pixel-color-idx) is very important to all graphical output.
 ;; In order to understand this function, we must understand how the Master System stores tiles in VRAM.
