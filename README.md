@@ -5,7 +5,7 @@ Runs commercial games.
 
 Supports the Sega Game Gear.
 
-Supports battery saves.
+Supports battery saves and save states.
 
 Uses a slightly modified version of the Z80Core found in this project: https://github.com/codesqueak/Z80Processor
 
@@ -15,6 +15,10 @@ The code for the modified Z80Core is not in this repo. It can be found here: htt
 Z is mapped to Button 1.
 
 X is mapped to Button 2.
+
+Q is mapped to Save State (for the current game).
+
+E is mapped to Load State (for the current game).
 
 Use the arrow keys for movement and ENTER to pause.
 
