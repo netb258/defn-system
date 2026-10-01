@@ -1,6 +1,7 @@
 (ns z80.joypads
   (:require [quil.core :as q]
-            [z80.memory :as memory])
+            [z80.memory :as memory]
+            [z80.save-states :as sstate])
   (:import java.awt.event.KeyEvent))
 
 ;; Default state is 0xFF (all bits 1 = all buttons unpressed)
@@ -50,6 +51,9 @@
    \m 2r00001000}) ;; P2 Button 2 (on port 0xDD bit 3)
  ;; P2 Button 2 (on port 0xDD bit 3)
 
+(def ^:private save-state-key \q)
+(def ^:private load-state-key \e)
+
 (defn- set-pressed
   "Takes the byte representing all buttons (it always starts out as 2r11111111) and one of the key press bytes defined above.
   button-byte will only have one bit set to 1, the others will be zero. That same 1 bit, will be set to 0 in all-buttons-byte.
@@ -68,7 +72,7 @@
 
 (defn make-key-press-handler
   "Returns a keys-press function that Quil's defsketch understands."
-  [^com.codingrodent.microprocessor.Z80.Z80Core cpu]
+  [cpu-atom vdp-atom memory-bus-atom io-bus-atom]
   (fn []
     (let [user-input (get-key)]
       (if (= user-input \newline)
@@ -77,9 +81,11 @@
         ;; When this button was pressed, it issued a non maskable interrupt that the CPU cannot ignore.
         (if @memory/gg-rom-selected?
           (swap! gg-start-button set-pressed 2r10000000)
-          (.setNMI cpu))
+          (.setNMI @cpu-atom))
         ;; Otherwise, run the existing controller port code
         (do
+          (when (= user-input save-state-key) (sstate/save-state cpu-atom vdp-atom))
+          (when (= user-input load-state-key) (sstate/load-state cpu-atom vdp-atom memory-bus-atom io-bus-atom))
           ;; Player 1
           (when-let [bit-p1 (get p1-key-map user-input)]
             (swap! joypad-p1 set-pressed bit-p1))
