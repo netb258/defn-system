@@ -135,15 +135,13 @@
 ;; --------------------------------------------------------------------------------------------------
 
 ;; This function will prepare everything needed for the instruction loop to run.
-(defn make-setup-function [^com.codingrodent.microprocessor.Z80.Z80Core cpu]
+(defn make-setup-function []
   (fn []
     ;; Technically we are emulating a PAL Master System and the FPS should be 50.
     ;; However, all Game Gear consoles run at 60 FPS no matter the region.
     ;; Setting the FPS to 60 covers both consoles.
     (q/frame-rate 60)
-    (reset! global-frame-buffer (q/create-image 256 224 :rgb))
-    (memory/reset-emulator cpu)
-    (println "Sega Master System initialized with Sega Mapper support. Running real-time cycle loop...")))
+    (reset! global-frame-buffer (q/create-image 256 224 :rgb))))
 
 (defn set-nearest-neighbor!
   "This function forces Nearest Neighbor sampling on all images.
@@ -153,13 +151,14 @@
   (.textureSampling (q/current-graphics) 2))
 
 ;; This function will call the instruction loop 50 times a second:
-(defn make-draw-function [^com.codingrodent.microprocessor.Z80.Z80Core cpu ^z80.vdp.VdpState vdp]
+(defn make-draw-function [cpu-atom vdp-atom]
   (fn []
     ;; 1. Execute Z80 code line-by-line while filling 'global-frame-buffer'
-    (do-instruction-loop! cpu vdp)
+    (do-instruction-loop! @cpu-atom vdp-atom)
     ;; 2. Force Nearest Neighbor sampling. I want the image blocky.
     (set-nearest-neighbor!)
-    ;; 3. Paint the fully constructed frame directly from the buffer
+    ;; 3. If we are dealing with a SMS rom, we should paint the frame directly from the frame-buffer.
+    ;; If we are dealing with a GG rom, we should crop the screen to 160x144 before doing the drawing.
     (let [screen-dimensions (display/get-screen-width-and-hieght)
           screen-width  (first screen-dimensions)
           screen-height (second screen-dimensions)
