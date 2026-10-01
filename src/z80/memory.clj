@@ -21,7 +21,7 @@
 (def ^:private mram-start     0xE000)
 (def ^:private mram-end       0xFFFF)
 
-;; (def ^{:tag 'bytes} rom (byte-array 49152))    ;; 48KB max for a basic ROM with no mapper.
+;; (def ^{:tag 'bytes} rom (byte-array 49152)) ;; 48KB max for a basic ROM with no mapper.
 ;; Since we are now implementing the standard Sega Mapper our old static 48KB array needs to go.
 (def ^:private rom (atom (byte-array 0)))
 
@@ -32,8 +32,7 @@
                                    :slot1 1
                                    :slot2 2}))
 
-(def ^{:tag 'bytes :private true} sms-ram (byte-array 8192)) ;; 8KB of actual Work RAM
-
+(def ^:private sms-ram (atom (byte-array 8192))) ;; 8KB of actual Work RAM
 
 ;; NOTE: We're going to be using these two functions a lot. Notice that the above ROM and RAM is defined as (byte-array).
 ;; This creates a problem. The original hardware works with unsigned bytes (0 to 255).
@@ -83,6 +82,63 @@
     (signed->unsigned (aget read-only-memory real-offset))))
 
 ;; --------------------------------------------------------------------------------------------------
+;; -------------------------------------- Battery Save Functions ------------------------------------
+;; --------------------------------------------------------------------------------------------------
+
+;; Port 0xFFFC - Control SRAM state (default 0). Tracks if SRAM is enabled.
+(def ^:private sram-control (atom 0))
+
+(defn- md5-hash
+  "Takes a ROM as a byte-array and returns it's MD5 hash as a string."
+  [^bytes rom-bytes]
+  (let [md (java.security.MessageDigest/getInstance "MD5")]
+    (.update md rom-bytes)
+    (format "%032x" (java.math.BigInteger. 1 (.digest md)))))
+
+(defn get-rom-md5-hash []
+  (md5-hash @rom))
+
+;; NOTE: We are using delay, because we want to wait for the @rom to be loaded by load-rom-into-memory!
+(def ^:private sram-file-path (delay (str (get-rom-md5-hash) ".sav")))
+
+;; Standard SMS Cartridge RAM is usually 8KB or 16KB.
+;; However, some Game Gear games come with 32KB of SRAM (for example Shining Force).
+;; Allocating 32KB covers the needs of both consoles.
+(def ^:private cart-sram 
+  (delay
+    (let [file (io/file @sram-file-path)]
+      (if (.exists file)
+        (with-open [xin (io/input-stream file)]
+          (let [buf (byte-array 32768)]
+            (.read xin buf)
+            buf))
+        (byte-array 32768)))))
+
+(defn save-sram-to-disk!
+  "Flushes the current in-memory Cartridge SRAM to a local file.
+   The whole operation is skipped if SRAM is empty."
+  []
+  (when (not (every? zero? @cart-sram))
+    (with-open [xout (io/output-stream @sram-file-path)]
+      (.write xout ^bytes @cart-sram))))
+
+(defn- sram-enabled? 
+  "Returns true if the SRAM enable bit (Bit 3) was set in port 0xFFFC."
+  []
+  (not= 0 (bit-and @sram-control 2r00001000)))
+
+(defn- get-sram-offset
+  "Calculates the offset in SRAM based on Address and Bank Select bit (Bit 2).
+   This is necessary, because the Sega Mapper is active for SRAM as well and will break it up into banks.
+   The mapper chip can only break up SRAM into two banks."
+  ^long [^long address]
+  (let [slot-size   16384
+        slot2-start 0x8000
+        bank (if (not= 0 (bit-and @sram-control 2r00000100)) slot-size 0)
+        sram-relative-addr (- address slot2-start)]
+    (+ bank sram-relative-addr)))
+
+;; --------------------------------------------------------------------------------------------------
 ;; -------------------------------------- ROM Loading Functions -------------------------------------
 ;; --------------------------------------------------------------------------------------------------
 
@@ -125,73 +181,59 @@
     (reset! rom new-target-array)
     (println (format "Successfully loaded ROM into cartridge memory (%d KB)." (quot actual-code-len 1024)))))
 
-(defn reset-emulator
-  "Clears system RAM and resets the Z80Core cpu object."
-  [^com.codingrodent.microprocessor.Z80.Z80Core cpu]
-  ;; Reset the Sega Mapper to its standard power-on baseline state
-  (reset! mapper-banks {:slot0 0
-                        :slot1 1
-                        :slot2 2})
-  ;; Flush the Master System Work RAM completely
-  (System/arraycopy (byte-array 8192) 0 sms-ram 0 8192)
-  ;; Hard reset the CPU hardware states for a clean boot
-  (.reset cpu)
-  (.resetTStates cpu)
-  (.setProgramCounter cpu rom-cart-start)) 
-
 ;; --------------------------------------------------------------------------------------------------
-;; -------------------------------------- Battery Save Functions ------------------------------------
+;; ------------------------------------------ Serialization  ----------------------------------------
 ;; --------------------------------------------------------------------------------------------------
 
-;; Port 0xFFFC - Control SRAM state (default 0). Tracks if SRAM is enabled.
-(def ^:private sram-control (atom 0))
+;; This module knows how to serialize and deserialize the system memory.
 
-(defn- md5-hash
-  "Takes a ROM as a byte-array and returns it's MD5 hash as a string."
-  [^bytes rom-bytes]
-  (let [md (java.security.MessageDigest/getInstance "MD5")]
-    (.update md rom-bytes)
-    (format "%032x" (java.math.BigInteger. 1 (.digest md)))))
+(defn- save-bytes-to-file
+  "Saves a byte-array (byte-arr) to a file on disk (file-path)."
+  [file-path byte-arr]
+  (with-open [out (io/output-stream file-path)]
+    (.write out byte-arr)))
 
-;; NOTE: We are using delay, because we want to wait for the @rom to be loaded by load-rom-into-memory!
-(def ^:private sram-file-path (delay (str (md5-hash @rom) ".sav")))
+(defn- load-bytes-from-file
+  "Takes the path to a file as a string.
+   Returns the contents of the file as a byte-array."
+  [file-path]
+  (with-open [in (io/input-stream file-path)]
+    (let [buf (byte-array (.length (io/file file-path)))]
+      (.read in buf)
+      buf)))
 
-;; Standard SMS Cartridge RAM is usually 8KB or 16KB.
-;; However, some Game Gear games come with 32KB of SRAM (for example Shining Force).
-;; Allocating 32KB covers the needs of both consoles.
-(def ^{:tag 'bytes :private true} cart-sram 
-  (delay
-    (let [file (io/file @sram-file-path)]
-      (if (.exists file)
-        (with-open [xin (io/input-stream file)]
-          (let [buf (byte-array 32768)]
-            (.read xin buf)
-            buf))
-        (byte-array 32768)))))
+(defn- write-ds-to-file
+  "Saves a Clojure data structure (ds) to a file (file-path).
+   The data structure is saved in EDN fromat."
+  [file-path ds]
+  (spit file-path (with-out-str (pr ds))))
 
-(defn save-sram-to-disk!
-  "Flushes the current in-memory Cartridge SRAM to a local file.
-   The whole operation is skipped if SRAM is empty."
-  []
-  (when (not (every? zero? @cart-sram))
-    (with-open [xout (io/output-stream @sram-file-path)]
-      (.write xout ^bytes @cart-sram))))
+(defn- read-ds-from-file
+  "Returns a Clojure data structure that is read from an END file (file-path)."
+  [file-path]
+  (read-string (slurp file-path)))
 
-(defn- sram-enabled? 
-  "Returns true if the SRAM enable bit (Bit 3) was set in port 0xFFFC."
-  []
-  (not= 0 (bit-and @sram-control 2r00001000)))
+(defn serialize-ram! [file-path]
+  (save-bytes-to-file file-path @sms-ram))
 
-(defn- get-sram-offset
-  "Calculates the offset in SRAM based on Address and Bank Select bit (Bit 2).
-   This is necessary, because the Sega Mapper is active for SRAM as well and will break it up into banks.
-   The mapper chip can only break up SRAM into two banks."
-  ^long [^long address]
-  (let [slot-size   16384
-        slot2-start 0x8000
-        bank (if (not= 0 (bit-and @sram-control 2r00000100)) slot-size 0)
-        sram-relative-addr (- address slot2-start)]
-    (+ bank sram-relative-addr)))
+(defn deserialize-ram! [file-path]
+  (let [ram-on-disk (load-bytes-from-file file-path)]
+    (reset! sms-ram ram-on-disk)))
+
+(defn serialize-sram! [file-path]
+  (when (sram-enabled?)
+    (save-bytes-to-file file-path @cart-sram)))
+
+(defn deserialize-sram! [file-path]
+  (when (sram-enabled?)
+    (let [sram-on-disk (load-bytes-from-file file-path)]
+      (System/arraycopy sram-on-disk 0 @cart-sram 0 32768))))
+
+(defn serialize-mapper! [file-path]
+  (write-ds-to-file file-path @mapper-banks))
+
+(defn deserialize-mapper! [file-path]
+  (reset! mapper-banks (read-ds-from-file file-path)))
 
 ;; --------------------------------------------------------------------------------------------------
 ;; -------------------------------------- Memory Bus constructor  -----------------------------------
@@ -218,7 +260,9 @@
   []
   (reify IMemory
     (^int readByte [this ^int address]
-      (let [^bytes active-rom @rom]
+      (let [^bytes active-rom @rom
+            ^bytes active-ram @sms-ram
+            ^bytes active-sram @cart-sram]
         (cond
           ;; --- SLOT 0 (0x0000 - 0x3FFF) ---
           (< address 0x4000)
@@ -233,37 +277,39 @@
           ;; --- SLOT 2 / SRAM SPACE (0x8000 - 0xBFFF) ---
           (< address ram-start)
           (if (sram-enabled?)
-            (signed->unsigned (aget @cart-sram (get-sram-offset address)))
+            (signed->unsigned (aget active-sram (get-sram-offset address)))
             (read-byte-from-mapper-slot :slot2 (- address 0x8000) active-rom))
           ;; --- WORK RAM (0xC000 - 0xDFFF) ---
-          (< address mram-start) (signed->unsigned (aget sms-ram (- address ram-start)))
+          (< address mram-start) (signed->unsigned (aget active-ram (- address ram-start)))
           ;; --- RAM MIRROR (0xE000 - 0xFFFF) ---
-          :else (signed->unsigned (aget sms-ram (- address mram-start))))))
+          :else (signed->unsigned (aget active-ram (- address mram-start))))))
 
     (^void writeByte [this ^int address ^int value]
-      (cond
-        ;; Write to Slot 2 SRAM (if enabled by the game)
-        (and (>= address 0x8000) (< address ram-start) (sram-enabled?))
-        (do
-          (aset-byte @cart-sram (get-sram-offset address) (unsigned->signed value)))
-        ;; ROM Space is otherwise read-only
-        (< address ram-start) nil 
-        ;; Write to main Work RAM
-        (< address mram-start) (aset-byte sms-ram (- address ram-start) (unsigned->signed value))
-        ;; Write to Mirror RAM area & Mapper Registers
-        :else
-        (do
-          ;; Mirror the write down into the actual 8KB Work RAM
-          (aset-byte sms-ram (- address mram-start) (unsigned->signed value))
-          ;; Intercept writes targeting the Mapper Registers (0xFFFD - 0xFFFF)
-          ;; and fill our Clojure atom with the data.
-          ;; The Sega Master System, uses Memory-Mapped I/O for its cartridge banking,
-          ;; so it's the job of the Memory Bus to do this, not the IO Bus.
-          (cond
-            (= address 0xFFFC) (reset! sram-control value)
-            (= address 0xFFFD) (swap! mapper-banks assoc :slot0 value)
-            (= address 0xFFFE) (swap! mapper-banks assoc :slot1 value)
-            (= address 0xFFFF) (swap! mapper-banks assoc :slot2 value))))
+      (let [^bytes active-ram @sms-ram
+            ^bytes active-sram @cart-sram]
+        (cond
+          ;; Write to Slot 2 SRAM (if enabled by the game)
+          (and (>= address 0x8000) (< address ram-start) (sram-enabled?))
+          (do
+            (aset-byte active-sram (get-sram-offset address) (unsigned->signed value)))
+          ;; ROM Space is otherwise read-only
+          (< address ram-start) nil 
+          ;; Write to main Work RAM
+          (< address mram-start) (aset-byte active-ram (- address ram-start) (unsigned->signed value))
+          ;; Write to Mirror RAM area & Mapper Registers
+          :else
+          (do
+            ;; Mirror the write down into the actual 8KB Work RAM
+            (aset-byte active-ram (- address mram-start) (unsigned->signed value))
+            ;; Intercept writes targeting the Mapper Registers (0xFFFD - 0xFFFF)
+            ;; and fill our Clojure atom with the data.
+            ;; The Sega Master System, uses Memory-Mapped I/O for its cartridge banking,
+            ;; so it's the job of the Memory Bus to do this, not the IO Bus.
+            (cond
+              (= address 0xFFFC) (reset! sram-control value)
+              (= address 0xFFFD) (swap! mapper-banks assoc :slot0 value)
+              (= address 0xFFFE) (swap! mapper-banks assoc :slot1 value)
+              (= address 0xFFFF) (swap! mapper-banks assoc :slot2 value)))))
       nil)
 
     (^int readWord [this ^int address]
