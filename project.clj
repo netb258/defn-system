@@ -6,6 +6,7 @@
   ;; :plugins [[cider/cider-nrepl "0.49.0"]]
   :resource-paths ["local-libs/Z80Processor-2.0.2.jar"]
   :dependencies [[org.clojure/clojure "1.11.3"]
+                 [com.esotericsoftware/kryo "5.6.0"]
                  [quil "2.7.1"]]
                  ;; [com.codingrodent.microprocessor/Z80Processor "2.0.2"]
   :main ^:skip-aot z80.core
