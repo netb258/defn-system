@@ -13,15 +13,21 @@
 ;; NOTE: A wonderful overview of the Sega Master System and all of it's components can be found here:
 ;; https://www.smspower.org/uploads/Development/JavaGear-Report.pdf
 
-(defonce cpu (atom nil))
+(def ^:private cpu (atom nil))
+(def ^:private memory-bus (atom nil))
+(def ^:private io-bus (atom nil))
 
 (defn construct-cpu!
   "This function will tie all components together.
   It will construct a valid Z80Core CPU and pass it a Memory Bus that knows how to communicate between CPU/RAM/ROM.
   It will also pass it a valid IO-BUS that know how to communicate between CPU/VDP/JoyPads."
   [^z80.vdp.VdpState vdp]
-  (let [cpu-instance (Z80Core. (memory/make-memory-bus) (io-bus/make-io-bus cpu vdp))]
-    (reset! cpu cpu-instance)))
+  (let [memory-bus-instance (memory/make-memory-bus)
+        io-bus-instance     (io-bus/make-io-bus cpu vdp)
+        cpu-instance        (Z80Core. memory-bus-instance io-bus-instance)]
+    (reset! memory-bus memory-bus-instance)
+    (reset! io-bus     io-bus-instance)
+    (reset! cpu        cpu-instance)))
 
 ;; Once the above function is called, the Z80Core object should be hooked up to all other components.
 
@@ -52,9 +58,11 @@
       :title "DeFn System"
       ;; NOTE: These two functions really kick off the emulation.
       ;; The setup/draw functions will start the Z80 instruction loop and draw the result to the screen.
-      :setup (emu-loop/make-setup-function @cpu)
-      :draw  (emu-loop/make-draw-function @cpu active-vdp)
-      :key-pressed  (joypads/make-key-press-handler @cpu)
+      :setup (emu-loop/make-setup-function)
+      :draw  (emu-loop/make-draw-function cpu active-vdp)
+      ;; NOTE: The key-press-handler receives all components as arguments.
+      ;; It needs to pass them to the save-states module, when certain keys are pressed.
+      :key-pressed  (joypads/make-key-press-handler cpu active-vdp memory-bus io-bus)
       :key-released (joypads/make-key-release-handler)
       ;; This executes exactly once right as the Quil window closes
       ;; This is the proper way to save SRAM, especially for the Game Gear as some games use it to supplement
