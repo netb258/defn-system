@@ -20,7 +20,8 @@
   sprite-overflow?
   sprite-collision?
   hblank-active?
-  vblank-active?])
+  vblank-active?
+  report-vblank-active?])
 
 ;; NOTE on VDP Registers - Notice that our VDP record below contains an array of 16 registers (:regs (int-array 16)).
 ;; Other modules will frequently look up these registers. This is a full description of the data they hold:
@@ -42,7 +43,12 @@
     :sprite-collision? false ;; Are any sprites colliding currently?
     :hblank-active? false    ;; Is the CPU executing an H-BLANK interrupt currently (this gets set during the Z80 instruction loop)?
     :vblank-active? false    ;; Is the CPU executing a V-BLANK interrupt currently  (this gets set during the Z80 instruction loop)?
+    :report-vblank-active? false ;; One of the VDP's duties is to report if a V-BLANK interrupt is happening during a VDP Status Port read.
     }))
+
+;; NOTE: There are 2 different flags for V-BLANK (:vblank-active? and :report-vblank-active?).
+;; The difference between them is that :report-vblank-active? only serves for VDP status port reads,
+;; while vblank-active? is actually used for interrupt management in the CPU instruction loop.
 
 ;; As mentioned above, the VDP can operate in 4 modes:
 ;; Mode 0 (00): VRAM Read Mode - Used when the Z80 CPU wants to read graphics data out of the VDP's 16KB Video RAM.
@@ -242,17 +248,19 @@
   The second one is the new state that the VDP should transition to."
   [^VdpState vdp ^Z80Core cpu]
   ;; Check if V-Blank is actively triggered and also check for sprite collisions and overflows.
-  (let [vblank-bit    (if (:vblank-active? vdp)    2r10000000 0x00)
-        overflow-bit  (if (:sprite-overflow? vdp)  2r01000000 0x00)
-        collision-bit (if (:sprite-collision? vdp) 2r00100000 0x00)
+  (let [vblank-bit    (if (:report-vblank-active? vdp) 2r10000000 0x00)
+        overflow-bit  (if (:sprite-overflow? vdp)      2r01000000 0x00)
+        collision-bit (if (:sprite-collision? vdp)     2r00100000 0x00)
         ;; When the CPU reads the VDP status port it must receive this combined status byte.
         current-status (bit-or vblank-bit overflow-bit collision-bit)]
     ;; Reading this port clears the CPU interrupt line.
     (.setInterrupt cpu false)
     ;; Return the accumulated status byte and reset VDP status flags.
+    ;; NOTE: Reading the VDP status port is the only thing that clears :report-vblank-active?
     [current-status (assoc vdp 
                            :first-byte? true 
                            :vblank-active? false
+                           :report-vblank-active? false
                            :hblank-active? false
                            :sprite-overflow? false
                            :sprite-collision? false)]))
