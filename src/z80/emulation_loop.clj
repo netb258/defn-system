@@ -121,7 +121,8 @@
         ;; Games use this window to: Update sprite positions (moving characters, enemies, projectiles),
         ;; Load new tile graphics into VDP memory and more.
         (when (= scanline 193)
-          (swap! vdp-atom assoc :vblank-active? true))
+          ;; NOTE: Reading the VDP status port is the only thing that clears :report-vblank-active?
+          (swap! vdp-atom assoc :vblank-active? true :report-vblank-active? true))
 
         ;; 5. END OF FRAME
         ;; This is the very last scanline of the PAL cycle loop.
