@@ -73,11 +73,12 @@
   The 'slot' parameter should be one of these keywords:
   :slot0, :slot1, :slot2."
   ^long [slot ^long address ^bytes read-only-memory]
-  (let [bank-data (slot @mapper-banks)
+  (let [bank-idx (slot @mapper-banks)
         total-banks (quot (alength read-only-memory) 16384)
         ;; Cleanly wraps around using mod calculation if the game is too small to have a third bank.
         ;; The smallest Master System game shuld be 32KB (or two banks each 16KB).
-        safe-bank (mod bank-data total-banks)
+        ;; These games should never read from slot 2. If bank-idx is 2 and total-banks is 2, the mod will return 0.
+        safe-bank (mod bank-idx total-banks)
         real-offset (+ (* safe-bank 16384) address)]
     (signed->unsigned (aget read-only-memory real-offset))))
 
