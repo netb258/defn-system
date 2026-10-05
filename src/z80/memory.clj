@@ -23,11 +23,14 @@
 
 ;; (def ^{:tag 'bytes} rom (byte-array 49152)) ;; 48KB max for a basic ROM with no mapper.
 ;; Since we are now implementing the standard Sega Mapper our old static 48KB array needs to go.
+;; On real hardware, once the use plugs in a cart, the cpu can freely access the cart's ROM memory.
 (def ^:private rom (atom (byte-array 0)))
 
 ;; The stardard Sega Mapper splits the ROM space into 16kb pieces/slots
-;; and dynamically loads parts of large games into the ROM space.
-;; Track the current active bank index for each of the three 16KB slots
+;; and dynamically indexes parts of large games into the ROM space.
+;; Track the current active bank index for each of the three 16KB slots.
+;; On real hardware, this small memory would be on the mapper chip.
+;; Games that come with the standard Sega Mapper will include instruction that write to this memory.
 (def ^:private mapper-banks (atom {:slot0 0
                                    :slot1 1
                                    :slot2 2}))
