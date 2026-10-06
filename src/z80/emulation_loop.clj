@@ -120,7 +120,7 @@
         ;; During V-BLANK the VRAM is fully accessible without disrupting the display.
         ;; Games use this window to: Update sprite positions (moving characters, enemies, projectiles),
         ;; Load new tile graphics into VDP memory and more.
-        (when (= scanline 193)
+        (when (= scanline 192)
           ;; NOTE: Reading the VDP status port is the only thing that clears :report-vblank-active?
           (swap! vdp-atom assoc :vblank-active? true :report-vblank-active? true))
 
