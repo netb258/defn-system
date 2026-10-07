@@ -224,7 +224,10 @@
         (let [reg-num (bit-and high-byte 2r00001111) ;; Figure out exactly which register to write.
               ^ints regs-arr (.regs vdp)]
           (aset regs-arr reg-num (int low-byte))
-          (assoc vdp :first-byte? true))
+          (assoc vdp 
+                 :mode code-type
+                 :vram-pointer new-loc
+                 :first-byte? true))
 
         ;; Mode 3: CRAM Pointer Setup (Top bits are 11xx xxxx)
         ;; The operation must be set to 3 so data-write! knows to route incoming bytes to CRAM.
