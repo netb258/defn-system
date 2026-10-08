@@ -62,7 +62,7 @@
   ;; Lines 243-312 jump to 0xBA and increment to 0xFF.
   (let [line (int (.current-scan-line vdp))]
     (cond
-      (<= line 242) line
+      (<= line 242) (dec line)
       (<= line 312) (+ 0xBA (- line 243))
       :else 0xFF))) ;; Safety boundary fallback
 
