@@ -26,8 +26,10 @@
         io-bus-instance     (io-bus/make-io-bus cpu vdp)
         cpu-instance        (Z80Core. memory-bus-instance io-bus-instance)]
     (reset! memory-bus memory-bus-instance)
-    (reset! io-bus     io-bus-instance)
-    (reset! cpu        cpu-instance)))
+    (reset! io-bus io-bus-instance)
+    ;; NOTE: We are initializing the SP with address 0xDFF0, because Shadow Dancer requires this on startup.
+    (.setSP cpu-instance 0xDFF0)
+    (reset! cpu cpu-instance)))
 
 ;; Once the above function is called, the Z80Core object should be hooked up to all other components.
 
