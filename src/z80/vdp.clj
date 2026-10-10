@@ -69,7 +69,6 @@
 (defn calculate-h-counter [^Z80Core cpu]
   ;; The H-counter is purely dependent on the current Z80 line progress.
   ;; 1 Z80 cycle = 1.5 H-Counter increments.
-  ;; NOTE: Tried keeping h-counter inside the VDP record, but this calculation is faster.
   (let [current-cycles (.getTStates cpu)
         line-cycles (mod current-cycles 227) ;; 227 cycles per line in PAL
         h-val (quot (* line-cycles 3) 2)]
