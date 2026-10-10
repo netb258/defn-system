@@ -68,7 +68,7 @@
    ^boolean h-scroll-lock? ;; Disables horizontal scrolling for rows 0-15 (Register 0, Bit 6 - for game HUDs)
    ^boolean v-scroll-lock? ;; Disables vertical scrolling for columns 24-31 (Register 0, Bit 7 - for game HUDs)
    ^boolean hide-left-8?   ;; Blanks out the leftmost 8 pixels using the overscan color (Register 0, Bit 5)
-   ^boolean blanking-requested?]) ;; Is the game is asking the VDP to display a blank screen?
+   ^boolean blanking-requested?]) ;; Is the game asking the VDP to display a blank screen?
 
 (defn- parse-background-data
   "Parses VDP registers and packs them into a single BackgroundData record."
@@ -327,7 +327,7 @@
    ^ints color-palette-cache    ;; System color palette cache
    ^ints img-pixels             ;; Framebuffer - pixel destination array
    ^int overscan-color          ;; The overscan color is always used in case of screen blanking.
-   ^boolean blanking-requested? ;; Is the game is asking the VDP to display a blank screen?
+   ^boolean blanking-requested? ;; Is the game asking the VDP to display a blank screen?
    ^boolean shift-sprites-left-8px?]) ;; An early shift in sprite positions is possible (VDP reg 0).
 
 ;; NOTE: Including img-pixels, color-palette-cache and vram-bytes in the SpriteData is a bit redundant,
