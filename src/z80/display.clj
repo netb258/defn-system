@@ -67,7 +67,8 @@
    ^int overscan-color     ;; Border/Overscan color value fetched from the palette cache
    ^boolean h-scroll-lock? ;; Disables horizontal scrolling for rows 0-15 (Register 0, Bit 6 - for game HUDs)
    ^boolean v-scroll-lock? ;; Disables vertical scrolling for columns 24-31 (Register 0, Bit 7 - for game HUDs)
-   ^boolean hide-left-8?]) ;; Blanks out the leftmost 8 pixels using the overscan color (Register 0, Bit 5)
+   ^boolean hide-left-8?   ;; Blanks out the leftmost 8 pixels using the overscan color (Register 0, Bit 5)
+   ^boolean blanking-requested?]) ;; Is the game is asking the VDP to display a blank screen?
 
 (defn- parse-background-data
   "Parses VDP registers and packs them into a single BackgroundData record."
@@ -78,6 +79,8 @@
         mode-224? (not= 0 (bit-and reg1 2r00001000))
         visible-height (int (if mode-224? 224 192))
         max-rows (int (if mode-224? 32 28))
+        ;; Bit 6 of VDP register 1 is the screen blanking bit, 0 means the game is asking the VDP to display a blank screen.
+        blanking-requested? (= 0 (bit-and reg1 2r01000000))
         ;; --- Register 2: Name Table Base Address ---
         reg2 (int (aget vdp-regs 2))
         ;; Bits 1-3 determine the base VRAM address and it gets multiplied by 1024 bytes (1KB).
@@ -107,7 +110,8 @@
        overscan-color
        h-scroll-lock?
        v-scroll-lock?
-       hide-left-8?)))
+       hide-left-8?
+       blanking-requested?)))
 
 ;; Apart from the info inside VDP registers (extracted by parse-background-data), the background drawing functions
 ;; will also need the info from entries in the Naming Table. These entries are described below:
@@ -161,7 +165,8 @@
         base-scroll-y      (int (:base-scroll-y cfg))
         max-rows           (int (:max-rows cfg))
         overscan-color     (int (:overscan-color cfg))
-        hide-left-8?       (boolean (:hide-left-8? cfg))]
+        hide-left-8?       (boolean (:hide-left-8? cfg))
+        screen-blanking-requested? (boolean (:blanking-requested? cfg))]
     (fn [^long pixel-x ^long pixel-y col-v-locked? row-h-locked?]
             ;; 1. VERTICAL AXIS LOOKUPS
             ;; If vertical scroll locking is active (for column entries >= 24), bypass VDP scroll offsets.
@@ -209,7 +214,7 @@
             ;; Extract the 4-bit pixel color using the SMS planar unpacking routine (SMS patterns are stored in a 4bpp format)
             tile-color-idx  (int (color/get-sms-pixel-color-idx vram-bytes vram-tile-index render-y render-x))
             cram-idx        (+ tile-color-idx palette-offset)
-            pixel-color     (int (aget color-palette-cache cram-idx))
+            pixel-color     (if screen-blanking-requested? overscan-color (int (aget color-palette-cache cram-idx)))
 
             ;; 5. ADD METADATA FOR SPRITE LAYER PRIORITY
             ;; Extract Background Priority Flag (Bit 4 of Name Table High-Byte)
@@ -313,14 +318,16 @@
       0)))
 
 (defrecord SpriteData
-  [^int visible-height       ;; Active screen height (192, 224, or 240)
-   ^int sat-base-addr        ;; VRAM address of Sprite Attribute Table (Y-coords)
-   ^int sat-info-table       ;; VRAM address of Sprite Info Table (X-coords/Tiles)
-   ^int sprite-tile-base     ;; Base index modifier for pattern generator (0 or 256)
-   ^boolean large-sprites?   ;; Sprite size mode (false = 8x8, true = 8x16)
-   ^bytes vram-bytes         ;; VRAM array reference
-   ^ints color-palette-cache ;; System color palette cache
-   ^ints img-pixels          ;; Framebuffer - pixel destination array
+  [^int visible-height          ;; Active screen height (192, 224, or 240)
+   ^int sat-base-addr           ;; VRAM address of Sprite Attribute Table (Y-coords)
+   ^int sat-info-table          ;; VRAM address of Sprite Info Table (X-coords/Tiles)
+   ^int sprite-tile-base        ;; Base index modifier for pattern generator (0 or 256)
+   ^boolean large-sprites?      ;; Sprite size mode (false = 8x8, true = 8x16)
+   ^bytes vram-bytes            ;; VRAM array reference
+   ^ints color-palette-cache    ;; System color palette cache
+   ^ints img-pixels             ;; Framebuffer - pixel destination array
+   ^int overscan-color          ;; The overscan color is always used in case of screen blanking.
+   ^boolean blanking-requested? ;; Is the game is asking the VDP to display a blank screen?
    ^boolean shift-sprites-left-8px?]) ;; An early shift in sprite positions is possible (VDP reg 0).
 
 ;; NOTE: Including img-pixels, color-palette-cache and vram-bytes in the SpriteData is a bit redundant,
@@ -335,6 +342,8 @@
         reg1             (int (aget ^ints vdp-regs 1))
         mode-224?        (not= 0 (bit-and reg1 2r00001000))
         visible-height   (int (if mode-224? 224 192))
+        ;; Bit 6 of VDP register 1 is the screen blanking bit, 0 means the game is asking the VDP to display a blank screen.
+        blanking-requested? (= 0 (bit-and reg1 2r01000000))
         ;; The Sprite Attribute Table (SAT) base is derived from Register 5.
         ;; Shifting (reg5 AND 0x7E) left by 7 bytes points to the Y-coordinate array.
         reg5             (aget ^ints vdp-regs 5)
@@ -343,6 +352,11 @@
         sat-info-table   (int (+ sat-base-addr 128))
         large-sprites?   (boolean (sprite-size-16? vdp))
         sprite-tile-base (int (get-sprite-tile-base vdp))
+        ;; --- Register 7: Border / Overscan Color ---
+        reg7             (int (aget vdp-regs 7))
+        border-palette-idx (bit-and reg7 2r00001111) ;; Lower 4 bits index the border color
+        ;; SMS background palette entries always reside in the second 16-color slot (offset 16+)
+        overscan-color   (int (aget color-palette-cache (+ border-palette-idx 16)))
         ;; Read Register 0 to check for the Early Clock (EC) Sprite Shift flag (Bit 3)
         reg0             (int (aget vdp-regs 0))
         shift-sprites-left-8px? (boolean (not= 0 (bit-and reg0 2r00001000)))]
@@ -355,6 +369,8 @@
       vram-bytes
       color-palette-cache
       img-pixels
+      overscan-color
+      blanking-requested?
       shift-sprites-left-8px?)))
 
 ;; Apart from the info inside VDP registers (extracted by parse-sprite-data), the sprite drawing functions
@@ -429,7 +445,9 @@
         large-sprites?      (boolean (.-large-sprites? ctx))
         vram-bytes          ^bytes (.-vram-bytes ctx)
         color-palette-cache ^ints (.-color-palette-cache ctx)
+        overscan-color      (int (.-overscan-color ctx))
         img-pixels          ^ints (.-img-pixels ctx)
+        screen-blanking-requested? (boolean (.-blanking-requested? ctx))
 
         ;; 1. 8x16 SPRITE TILE INDEX CALCULATIONS
         tile-row-offset    (int (quot tile-row 8))
@@ -462,7 +480,7 @@
               (let [render-idx (int (+ render-row current-screen-x))
                     ;; SMS sprites map exclusively to the second 16-color block of the system palette
                     sprite-color-idx (int (+ color-idx 16))
-                    pixel-color      (int (aget color-palette-cache sprite-color-idx))
+                    pixel-color      (if screen-blanking-requested? overscan-color (int (aget color-palette-cache sprite-color-idx)))
                     ;; 3. DECODE BACKGROUND LAYER METADATA AND CHECK FOR COLLISION
                     ;; Wrap read values in unchecked-int to bypass safe integer conversion traps.
                     bg-pixel-raw     (unchecked-int (aget img-pixels render-idx))
