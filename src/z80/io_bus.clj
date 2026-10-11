@@ -28,7 +28,7 @@
 (def ^:private port-3f-latch (atom 0xFF))
 
 ;; Define atoms to hold the state of the Game Gear Link cable system.
-;; Some GG games need to check these on startup (for example Puyo Puyo Tsu).
+;; Some GG games need to check these on startup (for example Puyo Puyo 2).
 (def gg-port-01 (atom 0x00)) ;; Parallel Data
 (def gg-port-02 (atom 0xFF)) ;; Data Direction (Usually defaults to inputs/0xFF)
 (def gg-port-03 (atom 0x00)) ;; Transmit Control
