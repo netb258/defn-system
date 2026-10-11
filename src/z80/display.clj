@@ -540,10 +540,12 @@
     (let [matching-sprites
           (loop [sprite-id 0 acc []]
             (if (< sprite-id 64) ;; Stop at 64 sprites
-              (let [y-addr (int (+ sat-base-addr sprite-id))
-                    sat-y  (int (memory/signed->unsigned (aget vram-bytes y-addr)))]
-                (if (and (not mode-224?) (= sat-y 0xD0)) acc ;; A vertical coordinate entry of 0xD0 signals the VDP to drop subsequent sprite calculations.
-                  (let [sprite-y      (int (inc sat-y))
+              (let [y-addr    (int (+ sat-base-addr sprite-id))
+                    sat-y     (int (memory/signed->unsigned (aget vram-bytes y-addr)))
+                    ;; All sat-y values above 208 must be treated as wrapping to the top of the screen.
+                    wrapped-y (if (> sat-y 208) (- sat-y 256) sat-y)]
+                (if (and (not mode-224?) (= sat-y 0xD0)) acc ;; A Y-coordinate entry of 0xD0 signals the VDP to drop subsequent sprite calculations.
+                  (let [sprite-y      (int (inc wrapped-y))
                         sprite-top    sprite-y
                         sprite-bottom (+ sprite-top sprite-height)
                         sprite-fine-y (int (- scanline sprite-y))]
