@@ -32,7 +32,7 @@
 (def gg-port-02 (atom 0xFF)) ;; Data Direction (Usually defaults to inputs/0xFF)
 (def gg-port-03 (atom 0x00)) ;; Transmit Control
 (def gg-port-04 (atom 0xFF)) ;; Receive Status (0xFF implies disconnected/idle)
-(def gg-port-05 (atom 0x00)) ;; Sound Control
+(def gg-port-05 (atom 0x00)) ;; Serial Control
 
 ;; --- SEGA MASTER SYSTEM I/O BUS ---
 ;; SMS components like Video (VDP) and Joypads are hooked up to the ports here.
