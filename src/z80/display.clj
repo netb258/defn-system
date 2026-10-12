@@ -75,10 +75,9 @@
   [^ints vdp-regs ^ints color-palette-cache]
   ;; --- Register 1: Video Mode Control ---
   (let [reg1 (int (aget vdp-regs 1))
-        ;; Bit 3 of Register 1 determines if the display is in the extended 224-line mode
-        mode-224? (not= 0 (bit-and reg1 2r00001000))
-        visible-height (int (if mode-224? 224 192))
-        max-rows (int (if mode-224? 32 28))
+        ;; We set max-rows to 28 and visible-height to 192, since the emulator only supports the standard 192 line mode.
+        max-rows 28
+        visible-height 192
         ;; Bit 6 of VDP register 1 is the screen blanking bit, 0 means the game is asking the VDP to display a blank screen.
         blanking-requested? (= 0 (bit-and reg1 2r01000000))
         ;; --- Register 2: Name Table Base Address ---
@@ -94,8 +93,8 @@
         ;; --- Registers 8 & 9: Scrolling Offsets ---
         base-scroll-x (int (memory/signed->unsigned (aget vdp-regs 8)))
         raw-scroll-y (int (memory/signed->unsigned (aget vdp-regs 9)))
-        ;; In 192-line mode, if Y scroll >= 224, it wraps around through 32 pixels instead of 256
-        base-scroll-y (int (if mode-224? raw-scroll-y (if (>= raw-scroll-y 224) (mod raw-scroll-y 32) raw-scroll-y)))
+        ;; In 192-line mode, if Y scroll >= 224, it wraps around through 32 pixels
+        base-scroll-y (int (if (>= raw-scroll-y 224) (mod raw-scroll-y 32) raw-scroll-y))
         ;; --- Register 7: Border / Overscan Color ---
         reg7 (int (aget vdp-regs 7))
         border-palette-idx (bit-and reg7 2r00001111) ;; Lower 4 bits index the border color
@@ -171,7 +170,7 @@
             ;; 1. VERTICAL AXIS LOOKUPS
             ;; If vertical scroll locking is active (for column entries >= 24), bypass VDP scroll offsets.
       (let [scrolled-y (int (if col-v-locked? pixel-y (+ pixel-y base-scroll-y)))
-            ;; Find which tile row (0-27) contains the targeted pixel y-coordinate (row can be 0-31 depending on mode-224).
+            ;; Find which tile row (0-27) contains the targeted pixel y-coordinate.
             tile-row   (int (mod (quot scrolled-y 8) max-rows))
             ;; Calculate the exact fine-Y offset (0 to 7) inside that 8x8 graphic matrix cell
             ;; NOTE: The pixel position within an 8x8 tile is typically called the FINE offset. We'll stick to that naming.
@@ -338,10 +337,9 @@
   [^z80.vdp.VdpState vdp ^ints color-palette-cache ^ints img-pixels]
   (let [vdp-regs   ^ints  (:regs vdp)
         vram-bytes ^bytes (:vram vdp)
-        ;; Extract video display mode and height from Register 1, Bit 3
         reg1             (int (aget ^ints vdp-regs 1))
-        mode-224?        (not= 0 (bit-and reg1 2r00001000))
-        visible-height   (int (if mode-224? 224 192))
+        ;; We set visible-height to 192, since the emulator only supports the standard 192 line mode.
+        visible-height   192
         ;; Bit 6 of VDP register 1 is the screen blanking bit, 0 means the game is asking the VDP to display a blank screen.
         blanking-requested? (= 0 (bit-and reg1 2r01000000))
         ;; The Sprite Attribute Table (SAT) base is derived from Register 5.
@@ -518,10 +516,10 @@
 
 (defn draw-all-sprites-line-for-scanline!
   "Takes a Quil image with the current background drawn on it.
-   Basically draws a single line of all sprites matching the current scanline.
-   Scans all 64 potential sprites and draws their line ONLY if they intersect the active scanline.
-   Returns the updated image with matching sprites applied."
-  [background-image vdp-atom scanline mode-224?]
+  Basically draws a single line of all sprites matching the current scanline.
+  Scans all 64 potential sprites and draws their line ONLY if they intersect the active scanline.
+  Returns the updated image with matching sprites applied."
+  [background-image vdp-atom scanline]
   (let [vram-bytes          ^bytes (:vram @vdp-atom)
         cram-ints           ^ints  (:cram @vdp-atom)
         color-palette-cache ^ints  (color/get-vdp-color-palette cram-ints)
@@ -544,7 +542,7 @@
                     sat-y     (int (memory/signed->unsigned (aget vram-bytes y-addr)))
                     ;; All sat-y values above 208 must be treated as wrapping to the top of the screen.
                     wrapped-y (if (> sat-y 208) (- sat-y 256) sat-y)]
-                (if (and (not mode-224?) (= sat-y 0xD0)) acc ;; A Y-coordinate entry of 0xD0 signals the VDP to drop subsequent sprite calculations.
+                (if (= sat-y 0xD0) acc ;; A Y-coordinate entry of 0xD0 signals the VDP to drop subsequent sprite calculations.
                   (let [sprite-y      (int (inc wrapped-y))
                         sprite-top    sprite-y
                         sprite-bottom (+ sprite-top sprite-height)
