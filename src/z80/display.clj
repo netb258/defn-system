@@ -26,7 +26,9 @@
 ;; These dimensions should be accurate for a SMS PAL console (and a Game Gear).
 ;; Notice that they do not do anything inside this module. Just felt like they belong here.
 
+;; The SMS has 256 X coordinates.
 (def sms-width 256)
+;; And 224 Y coordinates. However 99% of games only use 192 of them. The rest belongs to the blanked out "overscan" area.
 (def sms-height 224)
 
 (def gg-width 160)
