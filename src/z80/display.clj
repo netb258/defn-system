@@ -28,7 +28,7 @@
 
 ;; The SMS has 256 X coordinates.
 (def sms-width 256)
-;; And 224 Y coordinates. However 99% of games only use 192 of them. The rest belongs to the blanked out "overscan" area.
+;; And 224 Y coordinates. However 99% of games only use 192 of them. The rest belong to the blanked out "overscan" area.
 (def sms-height 224)
 
 (def gg-width 160)
