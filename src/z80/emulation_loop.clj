@@ -38,6 +38,11 @@
 
 ;; NOTE: The method executeOneInstruction has a line like this: instruction = memory.readByte(reg_PC).
 ;; Since the program counter starts out at 0x0000, we should be starting out by reading a single byte form the ROM.
+
+;; Notice, that we are implementing a PAL loop (313 scanlines instead of 262). This approach proved the most compatible.
+;; Simply put, some games will NOT run without a PAL loop (for example: Back to the Future 3).
+;; However, the opposite is not true. All non PAL games will run just fine with a PAL loop.
+
 (defn- do-instruction-loop!
   "Executes a single PAL frame scanline-by-scanline (313 lines total).
   Runs the CPU instructions and draws the graphics."
