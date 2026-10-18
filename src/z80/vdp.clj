@@ -23,28 +23,46 @@
   vblank-active?
   report-vblank-active?])
 
-;; NOTE on VDP Registers - Notice that our VDP record below contains an array of 16 registers (:regs (int-array 16)).
+;; NOTE on VDP Registers - Notice that our VDP record below contains an array of 16 registers.
 ;; Other modules will frequently look up these registers. This is a full description of the data they hold:
 ;; https://www.smspower.org/Development/VDPRegisters
 
+;; Also, VDP registers 0-10 apparantly have default values (https://www.smspower.org/Development/SMSOfficialDocs).
+;; This is a small detail, but some games will not run without it (for example: California Games 2)
+;; This is what the smspower docs say:
+
+;; The VDP registers are initialized at power on to the following values: 
+;; R0  $36	mode
+;; R1  $A0	mode
+;; R2  $FF	Screen Map Table Base
+;; R3  $FF	(Always $FF)
+;; R4  $FF	(Always $FF)
+;; R5  $FF	Sprite Table Base
+;; R6  $FB	Sprite Pattern Table Base
+;; R7  $00	Border color #0
+;; R8  $00	Scroll-H
+;; R9  $00	Scroll-V
+;; R10 $FF	H-line interrupt ($FF=OFF)
+
 (defn create-vdp []
-  (map->VdpState {
-    :vram (byte-array 16384) ;; 16KB of VRAM. Used for pretty much all graphics in an SMS game.
-    :cram (int-array 64)     ;; The SMS has 32 bytes of CRAM. Holds 32 colors. However the GG needs 64 bytes (32 colors * 2 bytes each). Using 64 bytes covers the needs of both.
-    :gg-cram-buffer 0        ;; Game Gear specific: The GG uses 12-bit colors, so they require 2 bytes. Holds the low byte of the 12-bit color.
-    :regs (int-array 16)     ;; 16 registers. They store valuable info on H/V scrolling locks, Sprite Attribute Tables and more.
-    :first-byte? true        ;; Every command the Z80 sends to the VDP control port is 2 bytes long. This is tracked with a 1-bit flip-flop (true/false).
-    :command-byte 0          ;; A temporary holding buffer for the first byte of a 2-byte control command.
-    :vram-pointer 0          ;; This will be The VDP Video Memory 14 bit Address Pointer.
-    :mode 0                  ;; Remembers the current mode (0, 1, 2, or 3) that the VDP is operating in.
-    :read-buffer 0           ;; Small but fast 8bit VRAM cache.
-    :current-scan-line 0     ;; This is basically the V-COUNTER.
-    :sprite-overflow? false  ;; The Master System can only have 8 sprites on a single scan-line. The VDP should report if this limit is exceeded.
-    :sprite-collision? false ;; Are any sprites colliding currently?
-    :hblank-active? false    ;; Is the CPU executing an H-BLANK interrupt currently (this gets set during the Z80 instruction loop)?
-    :vblank-active? false    ;; Is the CPU executing a V-BLANK interrupt currently  (this gets set during the Z80 instruction loop)?
-    :report-vblank-active? false ;; One of the VDP's duties is to report if a V-BLANK interrupt is happening during a VDP Status Port read.
-    }))
+  (let [regs-default (int-array [0x36 0xA0 0xFF 0xFF 0xFF 0xFF 0xFB 0x00 0x00 0x00 0xFF 0x00 0x00 0x00 0x00 0x00])]
+    (map->VdpState
+      {:vram (byte-array 16384) ;; 16KB of VRAM. Used for pretty much all graphics in an SMS game.
+       :cram (int-array 64)     ;; The SMS has 32 bytes of CRAM. Holds 32 colors. However the GG needs 64 bytes (32 colors * 2 bytes each). Using 64 bytes covers the needs of both.
+       :gg-cram-buffer 0        ;; Game Gear specific: The GG uses 12-bit colors, so they require 2 bytes. Holds the low byte of the 12-bit color.
+       :regs regs-default       ;; 16 registers. They store valuable info on H/V scrolling locks, Sprite Attribute Tables and more.
+       :first-byte? true        ;; Every command the Z80 sends to the VDP control port is 2 bytes long. This is tracked with a 1-bit flip-flop (true/false).
+       :command-byte 0          ;; A temporary holding buffer for the first byte of a 2-byte control command.
+       :vram-pointer 0          ;; This will be The VDP Video Memory 14 bit Address Pointer.
+       :mode 0                  ;; Remembers the current mode (0, 1, 2, or 3) that the VDP is operating in.
+       :read-buffer 0           ;; Small but fast 8bit VRAM cache.
+       :current-scan-line 0     ;; This is basically the V-COUNTER.
+       :sprite-overflow? false  ;; The Master System can only have 8 sprites on a single scan-line. The VDP should report if this limit is exceeded.
+       :sprite-collision? false ;; Are any sprites colliding currently?
+       :hblank-active? false    ;; Is the CPU executing an H-BLANK interrupt currently (this gets set during the Z80 instruction loop)?
+       :vblank-active? false    ;; Is the CPU executing a V-BLANK interrupt currently  (this gets set during the Z80 instruction loop)?
+       :report-vblank-active? false ;; One of the VDP's duties is to report if a V-BLANK interrupt is happening during a VDP Status Port read.
+       })))
 
 ;; NOTE: There are 2 different flags for V-BLANK (:vblank-active? and :report-vblank-active?).
 ;; The difference between them is that :report-vblank-active? only serves for VDP status port reads,
