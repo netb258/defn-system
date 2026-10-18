@@ -69,12 +69,14 @@
         (swap! vdp-atom assoc :current-scan-line scanline)
 
         ;; Contrary to intuition, the interrupts need to be fired before executing the CPU instructions.
+        ;; Notice that we are setting the interrupt line to true but never to false.
+        ;; The games themselves must clear the interrupt line when appropriate.
+        ;; The only way games can clear the interrupt line is by doing a VDP status port read.
         (let [vdp-state @vdp-atom
               vblank-asserted? (and (:vblank-active? vdp-state) (vblank-irq-enabled? vdp-state))
               hblank-asserted? (and (:hblank-active? vdp-state) (hblank-irq-enabled? vdp-state))]
-          (if (or vblank-asserted? hblank-asserted?)
-            (.setInterrupt cpu true)
-            (.setInterrupt cpu false)))
+          (when (or vblank-asserted? hblank-asserted?)
+            (.setInterrupt cpu true)))
 
         ;; 1. PROCESS Z80 CPU INSTRUCTIONS FOR THIS SCANLINE
         ;; Step the Z80 processor repeatedly until it consumes exactly 228 cycle T-states.
@@ -95,8 +97,10 @@
               (display/draw-all-sprites-line-for-scanline! frame-canvas vdp-atom scanline))))
 
         ;; 3. HANDLE H-BLANK
-        ;; The VDP line counter decrements on every active scanline.
-        (if (<= scanline 192)
+        ;; The VDP line counter decrements on every scanline up to 255.
+        ;; NOTE: The SMS uses the full capacity of the 8bit h-counter (0-255), because it supports resolution as high as 240p.
+        ;; The same is not true for the Game Gear, where 240p mode is explicitly dropped.
+        (if (<= scanline (if @memory/gg-rom-selected? 192 255))
           (let [current-count @line-interrupt-counter
                 new-count (dec current-count)]
             ;; When the counter underflows below 0, reset it from VDP Register 10 and request a CPU interrupt.
@@ -111,7 +115,7 @@
                 (swap! vdp-atom assoc :hblank-active? true))
               ;; Decrement counter normally
               (reset! line-interrupt-counter new-count)))
-          ;; Outside the active window, the counter continually reloads from Register 10
+          ;; Outside the 255 window, the counter continually reloads from Register 10
           (reset! line-interrupt-counter (get-vdp-reg10 @vdp-atom)))
 
         ;; 4. HANDLE V-BLANK
