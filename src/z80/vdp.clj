@@ -28,7 +28,6 @@
 ;; https://www.smspower.org/Development/VDPRegisters
 
 ;; Also, VDP registers 0-10 apparantly have default values (https://www.smspower.org/Development/SMSOfficialDocs).
-;; This is a small detail, but some games will not run without it (for example: California Games 2)
 ;; This is what the smspower docs say:
 
 ;; The VDP registers are initialized at power on to the following values: 
