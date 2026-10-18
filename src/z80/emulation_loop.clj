@@ -97,10 +97,8 @@
               (display/draw-all-sprites-line-for-scanline! frame-canvas vdp-atom scanline))))
 
         ;; 3. HANDLE H-BLANK
-        ;; The VDP line counter decrements on every scanline up to 255.
-        ;; NOTE: The SMS uses the full capacity of the 8bit h-counter (0-255), because it supports resolution as high as 240p.
-        ;; The same is not true for the Game Gear, where 240p mode is explicitly dropped.
-        (if (<= scanline (if @memory/gg-rom-selected? 192 255))
+        ;; The VDP line counter decrements on every scanline up to 192.
+        (if (<= scanline 192)
           (let [current-count @line-interrupt-counter
                 new-count (dec current-count)]
             ;; When the counter underflows below 0, reset it from VDP Register 10 and request a CPU interrupt.
@@ -115,7 +113,7 @@
                 (swap! vdp-atom assoc :hblank-active? true))
               ;; Decrement counter normally
               (reset! line-interrupt-counter new-count)))
-          ;; Outside the 255 window, the counter continually reloads from Register 10
+          ;; Outside the regular 192 window, the counter continually reloads from Register 10
           (reset! line-interrupt-counter (get-vdp-reg10 @vdp-atom)))
 
         ;; 4. HANDLE V-BLANK
