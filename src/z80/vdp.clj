@@ -74,14 +74,15 @@
 ;; Mode 3 (11): CRAM (Color RAM) Write Mode - This mode is dedicated to changing the colors displayed on the screen.
 
 (defn get-v-counter [^VdpState vdp]
-  ;; PAL Hardware V-Counter mapping rules:
+  ;; PAL Hardware V-Counter rules:
   ;; Lines 0-242 count up linearly (0x00 to 0xF2).
   ;; Lines 243-312 jump to 0xBA and increment to 0xFF.
-  (let [line (int (.current-scan-line vdp))]
-    (cond
-      (<= line 242) (dec line)
-      (<= line 312) (+ 0xBA (- line 243))
-      :else 0xFF))) ;; Safety boundary fallback
+  (let [line (int (.current-scan-line vdp))
+        counter-val (cond
+                      (<= line 242) (dec line)
+                      (<= line 312) (+ 0xBA (- line 243))
+                      :else 0xFF)] ;; Safety boundary fallback
+    (memory/signed->unsigned counter-val))) ;; Forces the output into a valid 0-255 unsigned byte range
 
 (defn calculate-h-counter [^Z80Core cpu]
   ;; The H-counter is purely dependent on the current Z80 line progress.
