@@ -118,11 +118,13 @@
 
         ;; 4. HANDLE V-BLANK
         ;; Trigger a VBlank on the last visible scanline, so that games have time to update
-        ;; before we go back to scanline 1 and start processing a new frame. This will be a significant pause.
-        ;; This is the longest most crucial synchronization event.
+        ;; before we go back to scanline 0 and start processing a new frame. This will be a significant pause.
+        ;; This is the longest, most crucial synchronization event.
         ;; During V-BLANK the VRAM is fully accessible without disrupting the display.
         ;; Games use this window to: Update sprite positions (moving characters, enemies, projectiles),
         ;; Load new tile graphics into VDP memory and more.
+        ;; NOTE, that triggering v-blank on scanline 192 is actually accurate for an NTSC loop not a PAL loop (242).
+        ;; We are leaving it at 192, because we also support the Game Gear and 192 seems to work for both consoles.
         (when (= scanline 192)
           ;; NOTE: Reading the VDP status port is the only thing that clears :report-vblank-active?
           (swap! vdp-atom assoc :vblank-active? true :report-vblank-active? true))
