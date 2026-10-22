@@ -98,6 +98,7 @@
 
         ;; 3. HANDLE H-BLANK
         ;; The VDP line counter decrements on every scanline up to 192.
+        ;; NOTE: Adapted the VDP counter logic from Zenga: https://github.com/friol/zenga/blob/main/js/smsVdp.js
         (if (<= scanline 192)
           (let [current-count @line-interrupt-counter
                 new-count (dec current-count)]
@@ -106,7 +107,7 @@
               (do
                 ;; Counter underflowed! Reload from VDP Register 10
                 (reset! line-interrupt-counter (get-vdp-reg10 @vdp-atom))
-                ;; Trigger CPU Interrupt if the game requested H-Blank IRQs
+                ;; Trigger H-BLANK Interrupt.
                 ;; We have just processed a whole single scan-line with the loop above.
                 ;; So, we can trigger an interrupt to let the game know there is a short time
                 ;; before we snap back and process another scan-line.
