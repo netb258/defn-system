@@ -80,6 +80,7 @@
   ;; PAL Hardware V-Counter rules:
   ;; Lines 0-242 count up linearly (0x00 to 0xF2).
   ;; Lines 243-312 jump to 0xBA and increment to 0xFF.
+  ;; This behaviour is documented here: https://www.smspower.org/Development/ScanlineCounter
   (let [line (int (.current-scan-line vdp))
         counter-val (cond
                       (<= line 242) (dec line)
@@ -91,7 +92,7 @@
   ;; The H-counter is purely dependent on the current Z80 line progress.
   ;; 1 Z80 cycle = 1.5 H-Counter increments.
   (let [current-cycles (.getTStates cpu)
-        line-cycles (mod current-cycles 227) ;; 227 cycles per line in PAL
+        line-cycles (mod current-cycles 228) ;; 228 cycles per line in PAL
         h-val (quot (* line-cycles 3) 2)]
     (if (<= h-val 225)
       h-val
