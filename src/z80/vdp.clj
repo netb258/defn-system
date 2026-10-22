@@ -100,6 +100,7 @@
         h-val (quot (* line-cycles 3) 2)]
     (if (<= h-val 225)
       h-val
+      ;; Apparantly above 225 (0xE1) the counter jumps back from 226 (0xE2) down to 202 (0xCA).
       (memory/signed->unsigned (+ 202 (- h-val 226))))))
 
 ;; NOTE: The code needed a lot of this: (bit-and some-vram-address 0x3FFF).
