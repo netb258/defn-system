@@ -112,9 +112,9 @@
                 ;; So, we can trigger an interrupt to let the game know there is a short time
                 ;; before we snap back and process another scan-line.
                 (swap! vdp-atom assoc :hblank-active? true))
-              ;; Decrement counter normally
+              ;; Else decrement counter normally.
               (reset! line-interrupt-counter new-count)))
-          ;; Outside the regular 192 window, the counter continually reloads from Register 10
+          ;; Outside the regular 192 window, the counter continually reloads from Register 10.
           (reset! line-interrupt-counter (get-vdp-reg10 @vdp-atom)))
 
         ;; 4. HANDLE V-BLANK
