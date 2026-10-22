@@ -73,6 +73,9 @@
 ;; Mode 2 (10): VDP Register Write Mode - Write to one of the VDPs 16 registers.
 ;; Mode 3 (11): CRAM (Color RAM) Write Mode - This mode is dedicated to changing the colors displayed on the screen.
 
+;; NOTE: All public functions in this module make up the interface that the Z80 CPU can use to read-data-from / write-data-to the VDP.
+;; These public functions need to be hooked up to IO ports inside the io_bus.clj module.
+
 (defn get-v-counter [^VdpState vdp]
   ;; PAL Hardware V-Counter rules:
   ;; Lines 0-242 count up linearly (0x00 to 0xF2).
@@ -182,6 +185,7 @@
 ;; to perform an upcoming VRAM Read, VRAM Write, VDP Register Write or CRAM Write.
 ;; This is exactly what this function does.
 ;; It parses the two byte command and sets the VDP in the proper state to execute one of it's modes.
+;; NOTE: A full description can be found here: https://www.smspower.org/Development/ControlPort
 
 (defn control-write!
   "Takes a byte 'value' and depending on what is inside the byte, the VDP will transition to a new state.
