@@ -88,6 +88,10 @@
                       :else 0xFF)] ;; Safety boundary fallback
     (memory/signed->unsigned counter-val))) ;; Forces the output into a valid 0-255 unsigned byte range
 
+;; NOTE: This function used to return 0 and that seemed to work just fine.
+;; It is my understanding that SMS games very rarely try to read the h-counter form the VDP.
+;; Still, I'll try to calculate this thing properly.
+
 (defn calculate-h-counter [^Z80Core cpu]
   ;; The H-counter is purely dependent on the current Z80 line progress.
   ;; 1 Z80 cycle = 1.5 H-Counter increments.
