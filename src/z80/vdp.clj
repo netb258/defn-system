@@ -192,6 +192,7 @@
 ;; This is exactly what this function does.
 ;; It parses the two byte command and sets the VDP in the proper state to execute one of it's modes.
 ;; NOTE: A full description can be found here: https://www.smspower.org/Development/ControlPort
+;; Also the Zenga's VDP module was helpful: https://github.com/friol/zenga/blob/main/js/smsVdp.js
 
 (defn control-write!
   "Takes a byte 'value' and depending on what is inside the byte, the VDP will transition to a new state.
