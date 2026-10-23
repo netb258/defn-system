@@ -5,8 +5,8 @@
 ;; This module basically diggs through the VRAM and VDP registers and displays the information inside them on the screen.
 ;; More info on the SMS VRAM layout can be found here:
 ;; https://www.smspower.org/Development/VRAMMemoryMap
-
 ;; More info on the VPD Registers can be found here: https://www.smspower.org/Development/VDPRegisters
+;; Also the VDP module of JavaGear was helpful: https://github.com/fedex81/javagear-mirror/blob/master/src/common/Vdp.java
 
 ;; Basically the Master System's VRAM is split up like this:
 ;; $0000 - $1FFF Graphics for tiles 0 - 255
