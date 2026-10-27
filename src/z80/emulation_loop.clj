@@ -94,7 +94,7 @@
             (display/draw-background-line! @vdp-atom frame-canvas scanline)
             ;; ONLY compute foreground sprites and run collision grid checks during active video display lines
             (when (< scanline active-limit)
-              (display/draw-all-sprites-line-for-scanline! frame-canvas vdp-atom scanline))))
+              (display/draw-sprites-line! frame-canvas vdp-atom scanline))))
 
         ;; 3. HANDLE H-BLANK
         ;; The VDP line counter decrements on every scanline up to 192.
