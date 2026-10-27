@@ -48,7 +48,15 @@
   Runs the CPU instructions and draws the graphics."
   [^com.codingrodent.microprocessor.Z80.Z80Core cpu vdp-atom]
   (let [;; PAL Sega Master System metrics: 313 total scanlines per frame (0 to 312).
-        lines-per-frame 313
+        total-lines-per-frame 313
+        ;; Even though the system processes 313 scanlines, only 192 of them are used to draw the game.
+        ;; Technically the SMS supports drawing on up to 240 lines, but this emulator only supports 192 mode.
+        ;; Keep in mind, the VAST MAJORITY of games only run in 192 mode (99% of games).
+        visible-lines 192
+        ;; The Master System's TileMap divides the TV screen into a matrix of 32 columns and 28 rows.
+        ;; This means 28 rows × 8 tile pixels = 224 pixels. This is true even if we only support 192 mode.
+        ;; The rest of the scanlines outside 192 are filled with the overscan color.
+        visible-lines-plus-overscan 224
         ;; Every scanline lasts exactly 228 CPU T-states (cycles). 
         ;; Total frame footprint = 313 lines * 228 cycles = 71,364 cycles per frame (~50Hz).
         cycles-per-line 228
@@ -61,7 +69,7 @@
     ;; Open the direct 1D primitive pixel array for unchecked mutations
     (.loadPixels frame-canvas)
 
-    (dotimes [scanline lines-per-frame]
+    (dotimes [scanline total-lines-per-frame]
       (let [start-tstates (.getTStates cpu)
             target-tstates (+ start-tstates cycles-per-line)]
 
@@ -87,19 +95,18 @@
 
         ;; 2. RUN LINE RENDERING FUNCTIONS
         ;; Only render within the standard 224-line limit.
-        (when (< scanline 224)
-          (let [active-limit 192]
-            ;; ALWAYS draw the background line. This ensures that when the system is in 192-line mode,
-            ;; lines 192 to 223 automatically drop into the overscan loop to draw a clean uniform border.
-            (display/draw-background-line! @vdp-atom frame-canvas scanline)
-            ;; ONLY compute foreground sprites and run collision grid checks during active video display lines
-            (when (< scanline active-limit)
-              (display/draw-sprites-line! frame-canvas vdp-atom scanline))))
+        (when (< scanline visible-lines-plus-overscan)
+          ;; ALWAYS draw the background line. This ensures that when the system is in 192-line mode,
+          ;; lines 192 to 223 automatically drop into the overscan loop to draw a clean uniform border.
+          (display/draw-background-line! @vdp-atom frame-canvas scanline)
+          ;; ONLY compute foreground sprites and run collision grid checks during active video display lines
+          (when (< scanline visible-lines)
+            (display/draw-sprites-line! frame-canvas vdp-atom scanline)))
 
         ;; 3. HANDLE H-BLANK
         ;; The VDP line counter decrements on every scanline up to 192.
         ;; NOTE: Adapted the VDP counter logic from Zenga: https://github.com/friol/zenga/blob/main/js/smsVdp.js
-        (if (<= scanline 192)
+        (if (<= scanline visible-lines)
           (let [current-count @line-interrupt-counter
                 new-count (dec current-count)]
             ;; When the counter underflows below 0, reset it from VDP Register 10 and request a CPU interrupt.
@@ -126,7 +133,7 @@
         ;; Load new tile graphics into VDP memory and more.
         ;; NOTE, that triggering v-blank on scanline 192 is actually accurate for an NTSC loop not a PAL loop (242).
         ;; We are leaving it at 192, because we also support the Game Gear and 192 seems to work for both consoles.
-        (when (= scanline 192)
+        (when (= scanline visible-lines)
           ;; NOTE: Reading the VDP status port is the only thing that clears :report-vblank-active?
           (swap! vdp-atom assoc :vblank-active? true :report-vblank-active? true))
 
