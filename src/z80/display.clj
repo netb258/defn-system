@@ -516,7 +516,7 @@
 ;; However, this function cannot aford the same luxury.
 ;; When a sprite collision or overflow happens it needs to be reported inside the VDP atom.
 
-(defn draw-all-sprites-line-for-scanline!
+(defn draw-sprites-line!
   "Takes a Quil image with the current background drawn on it.
   Basically draws a single line of all sprites matching the current scanline.
   Scans all 64 potential sprites and draws their line ONLY if they intersect the active scanline.
