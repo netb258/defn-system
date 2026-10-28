@@ -61,6 +61,8 @@
       ;; NOTE: These two functions really kick off the emulation.
       ;; The setup/draw functions will start the Z80 instruction loop and draw the result to the screen.
       :setup (emu-loop/make-setup-function)
+      ;; The drawing function receives the CPU and VDP as arguments. It needs the data inside the VDP in order to draw.
+      ;; It also needs to CPU to execute instructions. Otherwise the frames cannot advance.
       :draw  (emu-loop/make-draw-function cpu active-vdp)
       ;; NOTE: The key-press-handler receives all components as arguments.
       ;; It needs to pass them to the save-states module, when certain keys are pressed.
