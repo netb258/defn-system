@@ -54,8 +54,10 @@
   (let [active-vdp (atom (vdp/create-vdp))]
     (when (clojure.string/ends-with? rom-path ".gg")
       (reset! memory/gg-rom-selected? true))
+    
     (construct-cpu! active-vdp)
     (memory/load-rom-into-memory! (java.nio.file.Files/readAllBytes (java.nio.file.Paths/get rom-path (into-array String []))))
+    
     (q/defsketch sms-screen
       :title "DeFn System"
       ;; NOTE: These two functions really kick off the emulation.
