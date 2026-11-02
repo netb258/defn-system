@@ -91,8 +91,8 @@
                 (= @port-3f-latch 0xF5)
                 (bit-or joy2 2r11000000)  ;; Force Bits 6 and 7 to 1
 
-                ;; Default fallback (Standard Export / English mode)
-                :else (bit-or joy2 2r11000000))))
+                ;; Default fallback
+                :else (bit-and joy2 2r00111111))))
 
           :else 0xFF)))
 
