@@ -14,12 +14,8 @@
 ;; 0xC000 - 0xDFFF : System RAM (8KB)
 ;; 0xE000 - 0xFFFF : System RAM Mirror (Points to the same 8KB RAM)
 ;; They needed the mirror RAM addresses for convenience and also it apparantly saves on hardware.
-(def ^:private rom-cart-start 0x0000)
-(def ^:private rom-cart-end   0xBFFF)
-(def ^:private ram-start      0xC000)
-(def ^:private ram-end        0xDFFF)
-(def ^:private mram-start     0xE000)
-(def ^:private mram-end       0xFFFF)
+(def ^:private ram-start  0xC000)
+(def ^:private mram-start 0xE000)
 
 ;; (def ^{:tag 'bytes} rom (byte-array 49152)) ;; 48KB max for a basic ROM with no mapper.
 ;; Since we are now implementing the standard Sega Mapper our old static 48KB array needs to go.
