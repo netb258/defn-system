@@ -142,7 +142,11 @@
 ;; -------------------------------------- ROM Loading Functions -------------------------------------
 ;; --------------------------------------------------------------------------------------------------
 
-;;NOTE: We need this function, because some ROM dumpers add a header.
+;; NOTE: We need this function, because some ROM dumpers add a header.
+;; The vast majority of commercial ROMs have this magic string inside them (TMR SEGA).
+;; The magic string should be placed at certain well known addresses (0x7FF0 or 0x3FF0 or 0x1FF0).
+;; If we don't find the "TMR SEGA" string at these locations, then a ROM dumper has displaced it by adding extra data.
+
 (defn- detect-rom-header-offset
   "Scans raw ROM bytes for the magic 'TMR SEGA' string to determine
    if an extra 512-byte copier header is present.
