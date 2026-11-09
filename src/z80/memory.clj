@@ -294,9 +294,10 @@
         (cond
           ;; Just like in the readByte function above, address (0x8000 - 0xBFFF) is used for SRAM.
           ;; But only if bit 3 was set in the SRAM Control port (0xFFFC).
-          (and (>= address 0x8000) (< address ram-start) (sram-enabled?))
-          (do
-            (aset-byte active-sram (get-sram-offset address) (unsigned->signed value)))
+          (and (>= address 0x8000)
+               (< address ram-start)
+               (sram-enabled?))
+          (aset-byte active-sram (get-sram-offset address) (unsigned->signed value))
           ;; ROM Space is otherwise read-only
           (< address ram-start) nil 
           ;; Write to main Work RAM
