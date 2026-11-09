@@ -292,7 +292,8 @@
       (let [^bytes active-ram @sms-ram
             ^bytes active-sram @cart-sram]
         (cond
-          ;; Write to Slot 2 SRAM (if enabled by the game)
+          ;; Just like in the readByte function above, address (0x8000 - 0xBFFF) is used for SRAM.
+          ;; But only if bit 3 was set in the SRAM Control port (0xFFFC).
           (and (>= address 0x8000) (< address ram-start) (sram-enabled?))
           (do
             (aset-byte active-sram (get-sram-offset address) (unsigned->signed value)))
