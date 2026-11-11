@@ -155,6 +155,8 @@
     ;; However, all Game Gear consoles run at 60 FPS no matter the region.
     ;; Setting the FPS to 60 covers both consoles.
     (q/frame-rate 60)
+    ;; NOTE - :rgb creates a 32-bit integer per pixel (0x00RRGGBB) image.
+    ;; The top 8 bits are ignored and all pixels are treated as 100% opaque.
     (reset! global-frame-buffer (q/create-image 256 224 :rgb))))
 
 (defn set-nearest-neighbor!
