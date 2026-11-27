@@ -80,9 +80,12 @@
 
         ;; Keep VDP state synchronized with the current horizontal scan-line.
         (swap! vdp-atom assoc :current-scan-line scanline)
-
+        
         ;; --- PHASE 1: ACTIVE DISPLAY ---
         ;; Check for any interrupts already pending from previous events
+        ;; Notice that this module sets the interrupt line to true, but never to false.
+        ;; The games themselves must clear the interrupt line, when appropriate.
+        ;; The only way games can clear the interrupt line is by doing a VDP status port read.
         (let [vdp-state @vdp-atom
               vblank-asserted? (and (:vblank-active? vdp-state) (vblank-irq-enabled? vdp-state))
               hblank-asserted? (and (:hblank-active? vdp-state) (hblank-irq-enabled? vdp-state))]
