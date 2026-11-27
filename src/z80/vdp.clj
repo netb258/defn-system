@@ -74,7 +74,14 @@
 ;; Mode 3 (11): CRAM (Color RAM) Write Mode - This mode is dedicated to changing the colors displayed on the screen.
 
 ;; NOTE: All public functions in this module make up the interface that the Z80 CPU can use to read-data-from / write-data-to the VDP.
-;; These public functions need to be hooked up to IO ports inside the io_bus.clj module.
+;; These public functions need to be hooked up to IO ports inside the io_bus.clj module. They should be hooked up like this:
+
+;; Read from port $7E - get-v-counter
+;; Read from port $7F - calculate-h-counter
+;; Read from port $BE - data-read!
+;; Read from port $BF - read-status-port!
+;; Write to port  $BE - data-write!
+;; Write to port  $BF - control-write!
 
 (defn get-v-counter [^VdpState vdp]
   ;; PAL Hardware V-Counter rules:
@@ -158,7 +165,7 @@
       (or (= op 0) (= op 1) (= op 2))
       (let [address (take-14-bits loc)
             ^bytes vram (.vram vdp)]
-        (aset vram address (unchecked-byte value))
+        (aset vram address (memory/unsigned->signed value))
         (move-to-next-vram-addr vdp loc value))
 
       ;; --- CRAM (Palette) Write (Mode 3) ---
@@ -273,7 +280,8 @@
 ;; The Sprite collision flag does sound important, but in practice most games just use their own collision logic.
 
 (defn read-status-port!
-  "Returns a VDP status byte and a new state for the VDP.
+  "Performs a VDP control-read.
+  Returns a VDP status byte and a new state for the VDP.
   The function returns a vector with two values inside it.
   The first one is the status byte.
   The second one is the new state that the VDP should transition to."
