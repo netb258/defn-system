@@ -178,7 +178,7 @@
   []
   (.textureSampling (q/current-graphics) 2))
 
-;; This function will call the instruction loop 50 times a second:
+;; This function will call the instruction loop 60 times a second:
 (defn make-draw-function [cpu-atom vdp-atom]
   (fn []
     ;; 1. Execute Z80 code line-by-line while filling 'global-frame-buffer'
